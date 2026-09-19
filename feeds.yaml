@@ -1,0 +1,42 @@
+# Cyber Digest sources. Verified Sept 2026.
+# format: rss (default) | json_kev  (CISA KEV catalog, JSON — RSS was retired May 2025)
+# weight: importance multiplier (1.0 = normal). tier: news | advisory | intel.
+
+brand:
+  name: Cindera
+  tagline: Your group's threat brief
+
+sources:
+  # ---- General cybersecurity news (stable RSS) ----
+  - {name: BleepingComputer,  url: "https://www.bleepingcomputer.com/feed/",            tier: news, weight: 1.0}
+  - {name: The Hacker News,   url: "https://thehackernews.com/feeds/posts/default",     tier: news, weight: 1.0}
+  - {name: Krebs on Security, url: "https://krebsonsecurity.com/feed/",                 tier: news, weight: 1.1}
+  - {name: The Record,        url: "https://therecord.media/feed/",                     tier: news, weight: 1.0}
+  - {name: SecurityWeek,      url: "https://www.securityweek.com/feed/",                tier: news, weight: 0.9}
+  - {name: Dark Reading,      url: "https://www.darkreading.com/rss.xml",               tier: news, weight: 0.9}
+  - {name: Infosecurity Mag,  url: "https://www.infosecurity-magazine.com/rss/news/",   tier: news, weight: 0.9}
+
+  # ---- Official advisories (authoritative) ----
+  # CISA "all advisories" RSS is still live; KEV/alerts RSS were retired -> KEV via JSON below.
+  - {name: CISA Advisories,   url: "https://www.cisa.gov/cybersecurity-advisories/all.xml", tier: advisory, weight: 1.5}
+  - {name: CISA ICS,          url: "https://www.cisa.gov/cybersecurity-advisories/ics-advisories.xml", tier: advisory, weight: 1.2}
+  - {name: CISA KEV,          url: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json", tier: advisory, weight: 1.8, format: json_kev}
+
+  # ---- Vendor / threat-intel blogs ----
+  - {name: Google Threat Intel, url: "https://cloud.google.com/blog/topics/threat-intelligence/rss/", tier: intel, weight: 1.2}
+  - {name: Microsoft Security,   url: "https://www.microsoft.com/en-us/security/blog/feed/", tier: intel, weight: 1.1}
+  - {name: Cisco Talos,          url: "https://blog.talosintelligence.com/rss/",           tier: intel, weight: 1.1}
+  - {name: Palo Alto Unit 42,    url: "https://unit42.paloaltonetworks.com/feed/",         tier: intel, weight: 1.1}
+  - {name: CrowdStrike,          url: "https://www.crowdstrike.com/blog/feed",             tier: intel, weight: 1.0}
+  - {name: Google Project Zero,  url: "https://googleprojectzero.blogspot.com/feeds/posts/default", tier: intel, weight: 1.2}
+
+priority_keywords: {critical: 3.0, high: 2.0, medium: 1.0}
+
+keywords:
+  critical: [actively exploited, zero-day, zero day, in the wild, emergency directive,
+             known exploited, ransomware attack, mass exploitation, unauthenticated remote, rce]
+  high: [critical vulnerability, cvss 9, cvss 10, patch now, data breach, supply chain,
+         exploit released, proof of concept, poc, privilege escalation]
+  medium: [vulnerability, phishing, malware, advisory, update available, patch]
+
+cvss_critical_threshold: 9.0
