@@ -28,6 +28,7 @@ class Item:
     published: datetime
     score: float = 0.0
     severity: str = "info"
+    category: str = "news"  # display bucket: advisories | intel | health | news
     tags: list[str] = field(default_factory=list)
 
     @property
@@ -89,6 +90,7 @@ def fetch_source(src: dict, since: datetime) -> list[Item]:
                 tier=src.get("tier", "news"),
                 weight=float(src.get("weight", 1.0)),
                 published=pub,
+                category=src.get("category", src.get("tier", "news")),
             )
         )
     print(f"  · {src['name']}: {len(items)} in window")
@@ -128,6 +130,7 @@ def fetch_cisa_kev(src: dict, since: datetime) -> list[Item]:
             tier="advisory",
             weight=float(src.get("weight", 2.0)),
             published=pub,
+            category=src.get("category", "advisories"),
         )
         it.tags = [cve] if cve else []
         if v.get("knownRansomwareCampaignUse", "").lower() == "known":

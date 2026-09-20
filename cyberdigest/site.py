@@ -9,7 +9,29 @@ from datetime import datetime, timezone
 from .fetch import Item
 
 _TABS = [("daily", "Daily"), ("weekly", "Weekly"), ("monthly", "Monthly")]
-_LIMITS = {"daily": 12, "weekly": 20, "monthly": 30}
+
+# Items are bucketed by .category into ordered sections, each with its own limit,
+# so news / healthcare never get crowded out by advisories. Overridable from
+# feeds.yaml -> display: {sections: [...], section_limits: {...}}.
+_DEFAULT_SECTIONS = [
+    ("advisories", "CVE &amp; ADVISORIES"),
+    ("intel",      "THREAT ACTOR / INTEL"),
+    ("health",     "HEALTHCARE BREACHES"),
+    ("news",       "OTHER NEWS"),
+]
+_DEFAULT_SECTION_LIMITS = {"advisories": 12, "intel": 10, "health": 8, "news": 10}
+
+
+def _resolve_display(display):
+    display = display or {}
+    secs = display.get("sections")
+    if secs:
+        sections = [(s["category"], s.get("label", s["category"].upper())) for s in secs]
+    else:
+        sections = list(_DEFAULT_SECTIONS)
+    limits = dict(_DEFAULT_SECTION_LIMITS)
+    limits.update(display.get("section_limits", {}) or {})
+    return sections, limits
 _DOT = {"critical": "#ff8080", "high": "#ffb020", "medium": "#ffd84d", "info": "#7c8699"}
 _LABEL = {"critical": "CRITICAL", "high": "HIGH", "medium": "MEDIUM", "info": "INFO"}
 _CODE = re.compile(r"^(CVE-\d{4}-\d+|CVSS.*)$", re.I)
@@ -57,26 +79,47 @@ def _row(it: Item) -> str:
     )
 
 
-def _panel(period: str, items: list[Item]) -> str:
-    shown = items[: _LIMITS[period]]
+def _panel(period: str, items: list[Item], sections, section_limits) -> str:
     active = " active" if period == "daily" else ""
-    if not shown:
+    if not items:
         return (f'<section class="panel{active}" data-p="{period}">'
                 f'<p class="empty">No notable items in this window. All quiet.</p></section>')
-    lead, rest = shown[0], shown[1:]
+
+    lead = items[0]  # single most important item across all categories
     body = f'<div class="lead-label">&#9679; LEAD THREAT</div>{_hero(lead)}'
-    if rest:
-        body += '<div class="sec-label">ALSO NOTABLE</div>' + "".join(_row(i) for i in rest)
+
+    # bucket the rest by display category (items are already score-sorted)
+    buckets: dict[str, list[Item]] = {}
+    for it in items:
+        if it is lead:
+            continue
+        buckets.setdefault(getattr(it, "category", "news"), []).append(it)
+
+    configured = set()
+    for cat, label in sections:
+        configured.add(cat)
+        seq = buckets.get(cat, [])[: section_limits.get(cat, 8)]
+        if seq:
+            body += f'<div class="sec-label">{label}</div>' + "".join(_row(i) for i in seq)
+
+    # never silently drop an item whose category isn't in the configured sections
+    leftover = [i for c, lst in buckets.items() if c not in configured for i in lst]
+    if leftover:
+        body += '<div class="sec-label">OTHER</div>' + "".join(_row(i) for i in leftover[:8])
+
     return f'<section class="panel{active}" data-p="{period}">{body}</section>'
 
 
-def render_inner(digests: dict[str, list[Item]]) -> str:
+def render_inner(digests: dict[str, list[Item]], display=None) -> str:
     """The secret part: tabs + panels. This is what gets encrypted."""
+    sections, section_limits = _resolve_display(display)
     tabs = "".join(
         f'<button class="tab{" active" if p == "daily" else ""}" data-t="{p}">{lbl}</button>'
         for p, lbl in _TABS
     )
-    panels = "".join(_panel(p, digests.get(p, [])) for p, _ in _TABS)
+    panels = "".join(
+        _panel(p, digests.get(p, []), sections, section_limits) for p, _ in _TABS
+    )
     return f'<div class="tabs">{tabs}</div>{panels}'
 
 
@@ -125,8 +168,8 @@ body{margin:0;background:#0a0e16;color:#f4f7fb;font:16px/1.5 -apple-system,Segoe
 """
 
 
-def build_plain(digests, share_url: str, brand: dict) -> str:
-    return _shell(datetime.now(timezone.utc), render_inner(digests), share_url, brand, None)
+def build_plain(digests, share_url: str, brand: dict, display=None) -> str:
+    return _shell(datetime.now(timezone.utc), render_inner(digests, display), share_url, brand, None)
 
 
 def build_encrypted(salt_b64, iv_b64, ct_b64, iters, share_url: str, brand: dict) -> str:

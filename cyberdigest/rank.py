@@ -12,6 +12,18 @@ _CVSS = re.compile(r"cvss[:\s]*v?\d?\.?\d?[:\s]*([0-9]{1,2}(?:\.\d)?)", re.I)
 _SEV_ORDER = {"critical": 3, "high": 2, "medium": 1, "info": 0}
 _SEV_RANK = {v: k for k, v in _SEV_ORDER.items()}
 
+_health_re_cache: dict[tuple, "re.Pattern | None"] = {}
+
+
+def _health_pattern(cfg: dict):
+    kws = tuple(cfg.get("health_keywords", []))
+    if kws not in _health_re_cache:
+        _health_re_cache[kws] = (
+            re.compile(r"\b(?:" + "|".join(re.escape(k) for k in kws) + r")\b", re.I)
+            if kws else None
+        )
+    return _health_re_cache[kws]
+
 
 def _extract_cvss(text: str) -> float:
     best = 0.0
@@ -56,6 +68,15 @@ def score_item(it: Item, cfg: dict) -> Item:
     # advisories are inherently actionable
     if it.tier == "advisory":
         score += 1.0
+
+    # healthcare routing: dedicated health sources keep their category; general
+    # news/intel items about a healthcare breach get pulled into the health bucket
+    # too. Formal advisories (incl. CISA medical-device) stay under advisories.
+    # Word-boundary match so short tokens (phi, ehr) don't fire inside "phishing" etc.
+    if it.category != "advisories":
+        pat = _health_pattern(cfg)
+        if pat and pat.search(text):
+            it.category = "health"
 
     # recency: gentle decay so a 6-day-old item ranks below a fresh one
     age_h = (datetime.now(timezone.utc) - it.published).total_seconds() / 3600
