@@ -268,9 +268,8 @@ body{margin:0;background:#0a0e16;color:#f4f7fb;font:16px/1.5 -apple-system,Segoe
 .chip.on b{color:#0a0e16}
 .hint{color:#5a6274;font-weight:400;letter-spacing:0}
 .srcstrip-l{font-size:11px;font-weight:500;letter-spacing:1px;color:#7c8699;margin:2px 0 7px}
-.srcstrip{display:flex;gap:7px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:11px;margin-bottom:6px;scrollbar-width:none}
-.srcstrip::-webkit-scrollbar{display:none}
-.stab{flex:0 0 auto;cursor:pointer;font-size:12px;color:#9aa6bd;background:#0f1622;border:1px solid #232c3d;padding:5px 11px;border-radius:999px;white-space:nowrap;transition:background .15s,color .15s,border-color .15s}
+.srcstrip{display:flex;flex-wrap:wrap;gap:6px;padding-bottom:11px;margin-bottom:6px}
+.stab{flex:0 0 auto;cursor:pointer;font-size:10.5px;color:#9aa6bd;background:#0f1622;border:1px solid #232c3d;padding:3px 8px;border-radius:999px;white-space:nowrap;transition:background .15s,color .15s,border-color .15s}
 .stab:hover{border-color:#3a475d}
 .stab.on{background:#6ee7d6;border-color:#6ee7d6;color:#08110f;font-weight:600}
 .srcs-t{margin-top:11px}
