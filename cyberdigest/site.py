@@ -110,9 +110,56 @@ def _panel(period: str, items: list[Item], sections, section_limits) -> str:
     return f'<section class="panel{active}" data-p="{period}">{body}</section>'
 
 
-def render_inner(digests: dict[str, list[Item]], display=None) -> str:
-    """The secret part: tabs + panels. This is what gets encrypted."""
+def _dashboard(digests, sources, sections) -> str:
+    """Compact coverage summary over the recent (weekly) window: category +
+    severity chips, plus an expandable per-source activity list (all configured
+    sources, so a feed sitting at 0 is visible = quiet or broken)."""
+    from collections import Counter
+    window = digests.get("weekly") or digests.get("monthly") or digests.get("daily") or []
+    src_names = [s["name"] for s in sources] if sources else sorted({i.source for i in window})
+
+    by_cat = Counter(getattr(i, "category", "news") for i in window)
+    by_src = Counter(i.source for i in window)
+    crit = sum(1 for i in window if i.severity == "critical")
+    high = sum(1 for i in window if i.severity == "high")
+
+    short = {"advisories": "advisories", "intel": "intel", "health": "healthcare", "news": "news"}
+    ccls = {"advisories": "c-adv", "intel": "c-intel", "health": "c-health", "news": "c-news"}
+    chips = [f'<span class="chip"><b>{len(window)}</b> items</span>']
+    for cat, _ in sections:
+        chips.append(f'<span class="chip {ccls.get(cat,"")}"><b>{by_cat.get(cat,0)}</b> '
+                     f'{short.get(cat, cat)}</span>')
+    if crit:
+        chips.append(f'<span class="chip c-crit"><b>{crit}</b> critical</span>')
+    if high:
+        chips.append(f'<span class="chip c-high"><b>{high}</b> high</span>')
+
+    counts = [(n, by_src.get(n, 0)) for n in src_names]
+    counts.sort(key=lambda x: (-x[1], x[0].lower()))
+    maxc = max((c for _, c in counts), default=0) or 1
+    rows = ""
+    for name, c in counts:
+        pct = int(c / maxc * 100)
+        q = " q" if c == 0 else ""
+        rows += (f'<div class="srow{q}"><span class="sn">{_esc(name)}</span>'
+                 f'<span class="sbar"><i style="width:{pct}%"></i></span>'
+                 f'<span class="sc">{c}</span></div>')
+    live = sum(1 for _, c in counts if c > 0)
+
+    return (
+        '<div class="dash"><div class="dash-h">COVERAGE &middot; LAST 7 DAYS</div>'
+        f'<div class="chips">{"".join(chips)}</div>'
+        f'<details class="srcs-t"><summary>Per-source activity &middot; {live}/{len(counts)} active</summary>'
+        f'<div class="srcs">{rows}</div>'
+        '<div class="dnote">Bars are item counts over the last 7 days. '
+        '0 = quiet this week, or the feed needs attention.</div></details></div>'
+    )
+
+
+def render_inner(digests: dict[str, list[Item]], display=None, sources=None) -> str:
+    """The secret part: dashboard + tabs + panels. This is what gets encrypted."""
     sections, section_limits = _resolve_display(display)
+    dash = _dashboard(digests, sources, sections)
     tabs = "".join(
         f'<button class="tab{" active" if p == "daily" else ""}" data-t="{p}">{lbl}</button>'
         for p, lbl in _TABS
@@ -120,7 +167,7 @@ def render_inner(digests: dict[str, list[Item]], display=None) -> str:
     panels = "".join(
         _panel(p, digests.get(p, []), sections, section_limits) for p, _ in _TABS
     )
-    return f'<div class="tabs">{tabs}</div>{panels}'
+    return f'{dash}<div class="tabs">{tabs}</div>{panels}'
 
 
 _STYLE = """
@@ -165,11 +212,31 @@ body{margin:0;background:#0a0e16;color:#f4f7fb;font:16px/1.5 -apple-system,Segoe
 .gate input{width:100%;padding:12px;font-size:16px;border-radius:12px;border:1px solid #232c3d;background:#161d2b;color:#f4f7fb;margin:12px 0}
 .gate button{width:100%;padding:12px;font-size:15px;font-weight:500;border:none;border-radius:12px;background:#6ee7d6;color:#08201c;cursor:pointer}
 .err{color:#ff8080;font-size:13px;min-height:18px;margin-top:8px}
+.dash{background:#131a27;border:1px solid #232c3d;border-radius:14px;padding:13px 13px 11px;margin-bottom:18px}
+.dash-h{font-size:11px;font-weight:500;letter-spacing:1px;color:#7c8699;margin-bottom:10px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:11.5px;color:#9aa6bd;background:#0f1622;border:1px solid #232c3d;padding:4px 9px;border-radius:999px}
+.chip b{color:#f4f7fb;font-weight:600}
+.chip.c-adv b{color:#ff8a8a}.chip.c-intel b{color:#6ee7d6}.chip.c-health b{color:#ffb020}.chip.c-news b{color:#cbd5e6}
+.chip.c-crit{border-color:#3a1d20}.chip.c-crit b{color:#ff8080}.chip.c-high b{color:#ffb020}
+.srcs-t{margin-top:11px}
+.srcs-t>summary{cursor:pointer;font-size:11.5px;color:#8ea0b8;list-style:none;padding:5px 0 2px;user-select:none}
+.srcs-t>summary::-webkit-details-marker{display:none}
+.srcs-t>summary::before{content:"\\25B8  ";color:#6ee7d6}
+.srcs-t[open]>summary::before{content:"\\25BE  "}
+.srcs{margin-top:8px}
+.srow{display:flex;align-items:center;gap:9px;padding:3px 0}
+.sn{flex:0 0 42%;font-size:11.5px;color:#c3ccdb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sbar{flex:1;height:6px;background:#0f1622;border-radius:999px;overflow:hidden}
+.sbar i{display:block;height:100%;background:linear-gradient(90deg,#3a8f82,#6ee7d6);border-radius:999px}
+.sc{flex:0 0 24px;text-align:right;font-size:11.5px;color:#9aa6bd}
+.srow.q{opacity:.45}.srow.q .sc{color:#ff9b9b}
+.dnote{font-size:10.5px;color:#5a6274;margin-top:9px}
 """
 
 
-def build_plain(digests, share_url: str, brand: dict, display=None) -> str:
-    return _shell(datetime.now(timezone.utc), render_inner(digests, display), share_url, brand, None)
+def build_plain(digests, share_url: str, brand: dict, display=None, sources=None) -> str:
+    return _shell(datetime.now(timezone.utc), render_inner(digests, display, sources), share_url, brand, None)
 
 
 def build_encrypted(salt_b64, iv_b64, ct_b64, iters, share_url: str, brand: dict) -> str:

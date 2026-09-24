@@ -51,12 +51,12 @@ def main() -> int:
 
     passphrase = os.environ.get("PAGE_PASSPHRASE", "").strip()
     if passphrase:
-        inner = render_inner(digests, cfg.get("display"))
+        inner = render_inner(digests, cfg.get("display"), cfg.get("sources"))
         salt_b64, iv_b64, ct_b64 = _encrypt(inner, passphrase)
         page = build_encrypted(salt_b64, iv_b64, ct_b64, PBKDF2_ITERS, args.share_url, brand)
         mode = f"ENCRYPTED (AES-256-GCM, PBKDF2 {PBKDF2_ITERS} iters)"
     else:
-        page = build_plain(digests, args.share_url, brand, cfg.get("display"))
+        page = build_plain(digests, args.share_url, brand, cfg.get("display"), cfg.get("sources"))
         mode = "PLAIN (public) — set PAGE_PASSPHRASE to lock it"
 
     out = Path(args.out)
