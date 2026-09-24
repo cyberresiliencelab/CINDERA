@@ -18,6 +18,8 @@ sources:
   - {name: SecurityWeek,      url: "https://www.securityweek.com/feed/",                tier: news, category: news, weight: 0.9}
   - {name: Dark Reading,      url: "https://www.darkreading.com/rss.xml",               tier: news, category: news, weight: 0.9}
   - {name: Infosecurity Mag,  url: "https://www.infosecurity-magazine.com/rss/news/",   tier: news, category: news, weight: 0.9}
+  - {name: Cyber Security News, url: "https://cybersecuritynews.com/feed/",             tier: news, category: news, weight: 1.0}
+  - {name: SecurityOnline,    url: "https://securityonline.info/feed/",                 tier: news, category: news, weight: 0.9}
 
   # ---- Official advisories (authoritative, CVE-centric) ----
   # CISA "all advisories" RSS is still live; KEV/alerts RSS were retired -> KEV via JSON below.
@@ -34,10 +36,12 @@ sources:
   - {name: CrowdStrike,          url: "https://www.crowdstrike.com/blog/feed",             tier: intel, category: intel, weight: 1.0}
   - {name: Check Point Research, url: "https://research.checkpoint.com/feed/",             tier: intel, category: intel, weight: 1.0}
   - {name: Google Project Zero,  url: "https://googleprojectzero.blogspot.com/feeds/posts/default", tier: intel, category: intel, weight: 1.2}
+  - {name: Fortinet (FortiGuard), url: "https://feeds.feedburner.com/fortinet/blog/threat-research", tier: intel, category: intel, weight: 1.1}
 
   # ---- Healthcare breach / sector notifications ----
   - {name: HIPAA Journal,     url: "https://www.hipaajournal.com/feed/",                 tier: news, category: health, weight: 1.1}
   - {name: DataBreaches.net,  url: "https://www.databreaches.net/feed/",                 tier: news, category: health, weight: 1.0}
+  - {name: HealthcareInfoSecurity, url: "https://www.healthcareinfosecurity.com/rss-feeds", tier: news, category: health, weight: 1.1}
 
 # ---- Display grouping (sections shown under each Daily/Weekly/Monthly tab) ----
 # Order here is the order sections appear. Each section takes its own top-N by score,
