@@ -62,6 +62,13 @@ Each source in `feeds.yaml` takes two independent labels:
 Keeping them separate means a source can score like news but display in a specific
 section (e.g. the healthcare feeds are `tier: news`, `category: health`).
 
+### Browse-by-source strip & release dates
+Below the time tabs is a horizontally scrollable source strip (All sources + one
+chip per active source). Selecting a source filters the whole page to that source's
+articles, still grouped under the four category headers. The source, coverage
+category chips, and severity chips combine as one filter (e.g. CrowdStrike + critical).
+Every article shows its absolute release date alongside the relative age.
+
 ### Coverage dashboard
 The encrypted page opens with a compact **coverage panel** over the last 7 days:
 category totals (advisories / intel / healthcare / news), a critical/high count,
@@ -85,8 +92,23 @@ Each section takes its own top-N by score, so a busy advisories day can't bury t
 news or healthcare items. Add/reorder sections or change limits here — any item whose
 category isn't listed still appears under an automatic "OTHER" section, never dropped.
 
+### Tap-to-filter coverage chips
+Every chip in the coverage panel is a filter. Tapping a category (advisories /
+intel / healthcare / news) or a severity (critical / high) switches to the 7-day
+Weekly view and lists just those items; tapping the highlighted chip again, or the
+"items" chip, clears it. Pure client-side JS (`cinF`/`bindFilter` in `site.py`),
+bound after decrypt so it works on the encrypted page too.
+
+### Source diversity (no single source dominates)
+Within each section, sources are interleaved round-robin — the best item from
+each source, then the second from each, and so on — bounded by `per_source_cap`
+(max items from one source per section) and the section limit. This stops a busy
+source like CrowdStrike from filling a whole section, and gives every source of
+the 25 real estate. Raise `per_source_cap`/`section_limits` in feeds.yaml for more
+per source; lower them for a tighter brief.
+
 ### Healthcare routing
-Dedicated health sources (HIPAA Journal, DataBreaches.net) are always `health`. In
+Only HIPAA Journal is tagged `health` directly (it is healthcare-only). In
 addition, an item from *any* source whose title/summary matches `health_keywords`
 in `feeds.yaml` is routed into the Healthcare section — so a hospital breach reported
 by a general-news outlet still lands there. Matching is word-boundary based (so

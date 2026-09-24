@@ -20,6 +20,7 @@ sources:
   - {name: Infosecurity Mag,  url: "https://www.infosecurity-magazine.com/rss/news/",   tier: news, category: news, weight: 0.9}
   - {name: Cyber Security News, url: "https://cybersecuritynews.com/feed/",             tier: news, category: news, weight: 1.0}
   - {name: SecurityOnline,    url: "https://securityonline.info/feed/",                 tier: news, category: news, weight: 0.9}
+  - {name: GBHackers,         url: "https://gbhackers.com/feed/",                       tier: news, category: news, weight: 1.0}
 
   # ---- Official advisories (authoritative, CVE-centric) ----
   # CISA "all advisories" RSS is still live; KEV/alerts RSS were retired -> KEV via JSON below.
@@ -38,21 +39,30 @@ sources:
   - {name: Google Project Zero,  url: "https://googleprojectzero.blogspot.com/feeds/posts/default", tier: intel, category: intel, weight: 1.2}
   - {name: Fortinet (FortiGuard), url: "https://feeds.feedburner.com/fortinet/blog/threat-research", tier: intel, category: intel, weight: 1.1}
 
-  # ---- Healthcare breach / sector notifications ----
+  # ---- Healthcare sources ----
+  # Only HIPAA Journal is healthcare-only, so it's tagged health directly. DataBreaches
+  # (all sectors) and HealthcareInfoSecurity (general ISMG feed) are tagged news and get
+  # promoted into the Healthcare section ONLY when an item matches health_keywords —
+  # otherwise their non-healthcare items would pollute that section.
   - {name: HIPAA Journal,     url: "https://www.hipaajournal.com/feed/",                 tier: news, category: health, weight: 1.1}
-  - {name: DataBreaches.net,  url: "https://www.databreaches.net/feed/",                 tier: news, category: health, weight: 1.0}
-  - {name: HealthcareInfoSecurity, url: "https://www.healthcareinfosecurity.com/rss-feeds", tier: news, category: health, weight: 1.1}
+  - {name: DataBreaches.net,  url: "https://www.databreaches.net/feed/",                 tier: news, category: news,   weight: 1.0}
+  - {name: HealthcareInfoSecurity, url: "https://www.healthcareinfosecurity.com/rss-feeds", tier: news, category: news, weight: 1.0}
 
 # ---- Display grouping (sections shown under each Daily/Weekly/Monthly tab) ----
-# Order here is the order sections appear. Each section takes its own top-N by score,
-# so a busy advisories day can't bury the news or healthcare items.
+# Items are grouped into these sections. Within a section, sources are interleaved
+# round-robin (best item from each source first, then second, ...) so no single busy
+# source (e.g. CrowdStrike) can dominate — every source gets represented.
+#   section_limits  = max items shown per section
+#   per_source_cap  = max items from any ONE source within a section (diversity guard)
+# Raise per_source_cap / section_limits if you want even more per source.
 display:
   sections:
     - {category: advisories, label: "CVE &amp; ADVISORIES"}
     - {category: intel,      label: "THREAT ACTOR / INTEL"}
     - {category: health,     label: "HEALTHCARE BREACHES"}
     - {category: news,       label: "OTHER NEWS"}
-  section_limits: {advisories: 12, intel: 10, health: 8, news: 10}
+  section_limits: {advisories: 40, intel: 40, health: 25, news: 90}
+  per_source_cap: 10
 
 priority_keywords: {critical: 3.0, high: 2.0, medium: 1.0}
 
