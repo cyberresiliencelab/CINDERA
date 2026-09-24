@@ -61,7 +61,8 @@ def _hero(it: Item) -> str:
     words = [t for t in it.tags if not _CODE.match(t)][:1]
     wpill = f'<span class="wpill">{_esc(words[0])}</span>' if words else ""
     return (
-        f'<a class="hero" href="{_esc(it.link)}" target="_blank" rel="noopener">'
+        f'<a class="hero" href="{_esc(it.link)}" target="_blank" rel="noopener" '
+        f'data-cat="{getattr(it,"category","news")}" data-sev="{it.severity}">'
         f'<div class="hpills"><span class="sev sev-{it.severity}">{_LABEL.get(it.severity,"INFO")}</span>{wpill}</div>'
         f'<div class="htitle">{_esc(it.title)}</div>'
         f'<div class="hsum">{_esc(it.summary[:180])}</div>'
@@ -72,7 +73,8 @@ def _hero(it: Item) -> str:
 
 def _row(it: Item) -> str:
     return (
-        f'<a class="row" href="{_esc(it.link)}" target="_blank" rel="noopener">'
+        f'<a class="row" href="{_esc(it.link)}" target="_blank" rel="noopener" '
+        f'data-cat="{getattr(it,"category","news")}" data-sev="{it.severity}">'
         f'<span class="rdot" style="background:{_DOT.get(it.severity, "#7c8699")}"></span>'
         f'<div><div class="rtitle">{_esc(it.title)}</div>'
         f'<div class="rmeta">{_esc(it.source)} &middot; {_ago(it.published)}</div></div></a>'
@@ -125,14 +127,14 @@ def _dashboard(digests, sources, sections) -> str:
 
     short = {"advisories": "advisories", "intel": "intel", "health": "healthcare", "news": "news"}
     ccls = {"advisories": "c-adv", "intel": "c-intel", "health": "c-health", "news": "c-news"}
-    chips = [f'<span class="chip"><b>{len(window)}</b> items</span>']
+    chips = [f'<span class="chip cl" data-clear="1"><b>{len(window)}</b> items</span>']
     for cat, _ in sections:
-        chips.append(f'<span class="chip {ccls.get(cat,"")}"><b>{by_cat.get(cat,0)}</b> '
+        chips.append(f'<span class="chip cl {ccls.get(cat,"")}" data-fc="{cat}"><b>{by_cat.get(cat,0)}</b> '
                      f'{short.get(cat, cat)}</span>')
     if crit:
-        chips.append(f'<span class="chip c-crit"><b>{crit}</b> critical</span>')
+        chips.append(f'<span class="chip cl c-crit" data-fs="critical"><b>{crit}</b> critical</span>')
     if high:
-        chips.append(f'<span class="chip c-high"><b>{high}</b> high</span>')
+        chips.append(f'<span class="chip cl c-high" data-fs="high"><b>{high}</b> high</span>')
 
     counts = [(n, by_src.get(n, 0)) for n in src_names]
     counts.sort(key=lambda x: (-x[1], x[0].lower()))
@@ -147,7 +149,8 @@ def _dashboard(digests, sources, sections) -> str:
     live = sum(1 for _, c in counts if c > 0)
 
     return (
-        '<div class="dash"><div class="dash-h">COVERAGE &middot; LAST 7 DAYS</div>'
+        '<div class="dash"><div class="dash-h">COVERAGE &middot; LAST 7 DAYS '
+        '&middot; <span class="hint">tap to filter</span></div>'
         f'<div class="chips">{"".join(chips)}</div>'
         f'<details class="srcs-t"><summary>Per-source activity &middot; {live}/{len(counts)} active</summary>'
         f'<div class="srcs">{rows}</div>'
@@ -219,6 +222,11 @@ body{margin:0;background:#0a0e16;color:#f4f7fb;font:16px/1.5 -apple-system,Segoe
 .chip b{color:#f4f7fb;font-weight:600}
 .chip.c-adv b{color:#ff8a8a}.chip.c-intel b{color:#6ee7d6}.chip.c-health b{color:#ffb020}.chip.c-news b{color:#cbd5e6}
 .chip.c-crit{border-color:#3a1d20}.chip.c-crit b{color:#ff8080}.chip.c-high b{color:#ffb020}
+.chip.cl{cursor:pointer;transition:background .15s,border-color .15s,color .15s}
+.chip.cl:hover{border-color:#3a475d}
+.chip.on{background:#f4f7fb;border-color:#f4f7fb;color:#0a0e16}
+.chip.on b{color:#0a0e16}
+.hint{color:#5a6274;font-weight:400;letter-spacing:0}
 .srcs-t{margin-top:11px}
 .srcs-t>summary{cursor:pointer;font-size:11.5px;color:#8ea0b8;list-style:none;padding:5px 0 2px;user-select:none}
 .srcs-t>summary::-webkit-details-marker{display:none}
@@ -266,8 +274,30 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
               "document.querySelectorAll('.panel').forEach(function(s){s.classList.toggle('active',s.dataset.p===p)});"
               "};});}")
 
+    filter_js = (
+        "function cinF(fc,fs,chip){var on=chip&&!chip.classList.contains('on');"
+        "document.querySelectorAll('.chip.cl').forEach(function(c){c.classList.remove('on')});"
+        "if(on&&chip)chip.classList.add('on');var fcat=on?fc:'',fsev=on?fs:'';"
+        "if(on){document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x.dataset.t==='weekly')});"
+        "document.querySelectorAll('.panel').forEach(function(s){s.classList.toggle('active',s.dataset.p==='weekly')});}"
+        "document.querySelectorAll('.panel').forEach(function(p){"
+        "p.querySelectorAll('[data-cat]').forEach(function(el){"
+        "var okc=!fcat||el.getAttribute('data-cat')===fcat;"
+        "var oks=!fsev||el.getAttribute('data-sev')===fsev;"
+        "el.style.display=(okc&&oks)?'':'none';});"
+        "p.querySelectorAll('.lead-label').forEach(function(l){var h=l.nextElementSibling;"
+        "l.style.display=(h&&h.style.display==='none')?'none':'';});"
+        "p.querySelectorAll('.sec-label').forEach(function(lbl){var vis=false,n=lbl.nextElementSibling;"
+        "while(n&&!n.classList.contains('sec-label')){"
+        "if(n.hasAttribute('data-cat')&&n.style.display!=='none'){vis=true;break;}n=n.nextElementSibling;}"
+        "lbl.style.display=vis?'':'none';});});}"
+        "function bindFilter(){document.querySelectorAll('.chip.cl').forEach(function(c){"
+        "c.onclick=function(){if(c.hasAttribute('data-clear')){cinF('','',null);return;}"
+        "cinF(c.getAttribute('data-fc')||'',c.getAttribute('data-fs')||'',c);};});}"
+    )
+
     if encrypted is None:
-        return head + f'<div id="app">{inner}</div>' + foot + f'<script>{tab_js}bindTabs();</script></body></html>'
+        return head + f'<div id="app">{inner}</div>' + foot + f'<script>{tab_js}{filter_js}bindTabs();bindFilter();</script></body></html>'
 
     gate = ('<div id="gate" class="gate"><div class="lk">&#128274;</div>'
             '<p>Members only. Enter the group passphrase.</p>'
@@ -285,7 +315,7 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
         "return dec.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:iv},k,ct));}"
         "async function attempt(p){try{document.getElementById('app').innerHTML=await unlock(p);"
         "document.getElementById('gate').style.display='none';"
-        "document.getElementById('app').style.display='block';bindTabs();return true;}catch(e){return false;}}"
+        "document.getElementById('app').style.display='block';bindTabs();bindFilter();return true;}catch(e){return false;}}"
         "document.getElementById('go').onclick=async function(){var p=document.getElementById('pw').value;"
         "if(!p){document.getElementById('err').textContent='Enter the passphrase';return;}"
         "document.getElementById('err').textContent='Checking…';"
@@ -294,4 +324,4 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
         "if(e.key==='Enter')document.getElementById('go').click();});"
         "(function(){var m=location.hash.match(/k=([^&]+)/);if(m)attempt(decodeURIComponent(m[1]));})();"
     )
-    return head + gate + foot + f'<script>{tab_js}{dec_js}</script></body></html>'
+    return head + gate + foot + f'<script>{tab_js}{filter_js}{dec_js}</script></body></html>'
