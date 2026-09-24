@@ -19,7 +19,8 @@ _DEFAULT_SECTIONS = [
     ("health",     "HEALTHCARE BREACHES"),
     ("news",       "OTHER NEWS"),
 ]
-_DEFAULT_SECTION_LIMITS = {"advisories": 12, "intel": 10, "health": 8, "news": 10}
+_DEFAULT_SECTION_LIMITS = {"advisories": 40, "intel": 40, "health": 25, "news": 90}
+_DEFAULT_SOURCE_CAP = 10  # max items from one source within a section (diversity guard)
 
 
 def _resolve_display(display):
@@ -31,7 +32,32 @@ def _resolve_display(display):
         sections = list(_DEFAULT_SECTIONS)
     limits = dict(_DEFAULT_SECTION_LIMITS)
     limits.update(display.get("section_limits", {}) or {})
-    return sections, limits
+    cap = display.get("per_source_cap", _DEFAULT_SOURCE_CAP)
+    return sections, limits, cap
+
+
+def _diversify(items: list[Item], limit: int, cap) -> list[Item]:
+    """Interleave sources round-robin: the best item from each source first, then the
+    second from each, and so on — up to `cap` per source and `limit` overall. Keeps a
+    single busy source from filling the whole section while preserving score order."""
+    from collections import OrderedDict
+    by_src: "OrderedDict[str, list[Item]]" = OrderedDict()
+    for it in items:  # items arrive score-sorted, so first-seen = highest-scoring source
+        by_src.setdefault(it.source, []).append(it)
+    out: list[Item] = []
+    r = 0
+    while len(out) < limit:
+        added = False
+        for lst in by_src.values():
+            if r < len(lst) and (cap is None or r < cap):
+                out.append(lst[r])
+                added = True
+                if len(out) >= limit:
+                    break
+        if not added:
+            break
+        r += 1
+    return out
 _DOT = {"critical": "#ff8080", "high": "#ffb020", "medium": "#ffd84d", "info": "#7c8699"}
 _LABEL = {"critical": "CRITICAL", "high": "HIGH", "medium": "MEDIUM", "info": "INFO"}
 _CODE = re.compile(r"^(CVE-\d{4}-\d+|CVSS.*)$", re.I)
@@ -52,6 +78,11 @@ def _ago(dt: datetime) -> str:
     return f"{int(secs // 86400)}d ago"
 
 
+def _date(dt: datetime) -> str:
+    """Absolute release date, e.g. '24 Sep 2026'."""
+    return f"{dt.day} {dt:%b %Y}"
+
+
 def _code_chip(it: Item) -> str:
     codes = [t for t in it.tags if _CODE.match(t)]
     return f'<span class="code">{_esc(" · ".join(codes[:2]))}</span>' if codes else ""
@@ -62,11 +93,12 @@ def _hero(it: Item) -> str:
     wpill = f'<span class="wpill">{_esc(words[0])}</span>' if words else ""
     return (
         f'<a class="hero" href="{_esc(it.link)}" target="_blank" rel="noopener" '
-        f'data-cat="{getattr(it,"category","news")}" data-sev="{it.severity}">'
+        f'data-cat="{getattr(it,"category","news")}" data-sev="{it.severity}" data-src="{_esc(it.source)}">'
         f'<div class="hpills"><span class="sev sev-{it.severity}">{_LABEL.get(it.severity,"INFO")}</span>{wpill}</div>'
         f'<div class="htitle">{_esc(it.title)}</div>'
         f'<div class="hsum">{_esc(it.summary[:180])}</div>'
         f'<div class="hmeta"><span>{_esc(it.source)}</span><i class="d"></i>'
+        f'<span>{_date(it.published)}</span><i class="d"></i>'
         f'<span>{_ago(it.published)}</span>{_code_chip(it)}</div></a>'
     )
 
@@ -74,14 +106,14 @@ def _hero(it: Item) -> str:
 def _row(it: Item) -> str:
     return (
         f'<a class="row" href="{_esc(it.link)}" target="_blank" rel="noopener" '
-        f'data-cat="{getattr(it,"category","news")}" data-sev="{it.severity}">'
+        f'data-cat="{getattr(it,"category","news")}" data-sev="{it.severity}" data-src="{_esc(it.source)}">'
         f'<span class="rdot" style="background:{_DOT.get(it.severity, "#7c8699")}"></span>'
         f'<div><div class="rtitle">{_esc(it.title)}</div>'
-        f'<div class="rmeta">{_esc(it.source)} &middot; {_ago(it.published)}</div></div></a>'
+        f'<div class="rmeta">{_esc(it.source)} &middot; {_date(it.published)} &middot; {_ago(it.published)}</div></div></a>'
     )
 
 
-def _panel(period: str, items: list[Item], sections, section_limits) -> str:
+def _panel(period: str, items: list[Item], sections, section_limits, cap) -> str:
     active = " active" if period == "daily" else ""
     if not items:
         return (f'<section class="panel{active}" data-p="{period}">'
@@ -100,7 +132,7 @@ def _panel(period: str, items: list[Item], sections, section_limits) -> str:
     configured = set()
     for cat, label in sections:
         configured.add(cat)
-        seq = buckets.get(cat, [])[: section_limits.get(cat, 8)]
+        seq = _diversify(buckets.get(cat, []), section_limits.get(cat, 12), cap)
         if seq:
             body += f'<div class="sec-label">{label}</div>' + "".join(_row(i) for i in seq)
 
@@ -161,16 +193,24 @@ def _dashboard(digests, sources, sections) -> str:
 
 def render_inner(digests: dict[str, list[Item]], display=None, sources=None) -> str:
     """The secret part: dashboard + tabs + panels. This is what gets encrypted."""
-    sections, section_limits = _resolve_display(display)
+    sections, section_limits, cap = _resolve_display(display)
     dash = _dashboard(digests, sources, sections)
     tabs = "".join(
         f'<button class="tab{" active" if p == "daily" else ""}" data-t="{p}">{lbl}</button>'
         for p, lbl in _TABS
     )
-    panels = "".join(
-        _panel(p, digests.get(p, []), sections, section_limits) for p, _ in _TABS
+    # source strip: All + each source that has items, busiest first
+    from collections import Counter
+    widest = digests.get("monthly") or digests.get("weekly") or digests.get("daily") or []
+    order = [s for s, _ in Counter(i.source for i in widest).most_common()]
+    stabs = '<span class="stab on" data-fsrc="">All sources</span>' + "".join(
+        f'<span class="stab" data-fsrc="{_esc(s)}">{_esc(s)}</span>' for s in order
     )
-    return f'{dash}<div class="tabs">{tabs}</div>{panels}'
+    strip = f'<div class="srcstrip-l">BROWSE BY SOURCE</div><div class="srcstrip">{stabs}</div>'
+    panels = "".join(
+        _panel(p, digests.get(p, []), sections, section_limits, cap) for p, _ in _TABS
+    )
+    return f'{dash}<div class="tabs">{tabs}</div>{strip}{panels}'
 
 
 _STYLE = """
@@ -227,6 +267,12 @@ body{margin:0;background:#0a0e16;color:#f4f7fb;font:16px/1.5 -apple-system,Segoe
 .chip.on{background:#f4f7fb;border-color:#f4f7fb;color:#0a0e16}
 .chip.on b{color:#0a0e16}
 .hint{color:#5a6274;font-weight:400;letter-spacing:0}
+.srcstrip-l{font-size:11px;font-weight:500;letter-spacing:1px;color:#7c8699;margin:2px 0 7px}
+.srcstrip{display:flex;gap:7px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:11px;margin-bottom:6px;scrollbar-width:none}
+.srcstrip::-webkit-scrollbar{display:none}
+.stab{flex:0 0 auto;cursor:pointer;font-size:12px;color:#9aa6bd;background:#0f1622;border:1px solid #232c3d;padding:5px 11px;border-radius:999px;white-space:nowrap;transition:background .15s,color .15s,border-color .15s}
+.stab:hover{border-color:#3a475d}
+.stab.on{background:#6ee7d6;border-color:#6ee7d6;color:#08110f;font-weight:600}
 .srcs-t{margin-top:11px}
 .srcs-t>summary{cursor:pointer;font-size:11.5px;color:#8ea0b8;list-style:none;padding:5px 0 2px;user-select:none}
 .srcs-t>summary::-webkit-details-marker{display:none}
@@ -275,25 +321,33 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
               "};});}")
 
     filter_js = (
-        "function cinF(fc,fs,chip){var on=chip&&!chip.classList.contains('on');"
-        "document.querySelectorAll('.chip.cl').forEach(function(c){c.classList.remove('on')});"
-        "if(on&&chip)chip.classList.add('on');var fcat=on?fc:'',fsev=on?fs:'';"
-        "if(on){document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x.dataset.t==='weekly')});"
-        "document.querySelectorAll('.panel').forEach(function(s){s.classList.toggle('active',s.dataset.p==='weekly')});}"
-        "document.querySelectorAll('.panel').forEach(function(p){"
+        "var CF={src:'',cat:'',sev:''};"
+        "function cinApply(){document.querySelectorAll('.panel').forEach(function(p){"
         "p.querySelectorAll('[data-cat]').forEach(function(el){"
-        "var okc=!fcat||el.getAttribute('data-cat')===fcat;"
-        "var oks=!fsev||el.getAttribute('data-sev')===fsev;"
-        "el.style.display=(okc&&oks)?'':'none';});"
+        "var ok=(!CF.src||el.getAttribute('data-src')===CF.src)"
+        "&&(!CF.cat||el.getAttribute('data-cat')===CF.cat)"
+        "&&(!CF.sev||el.getAttribute('data-sev')===CF.sev);"
+        "el.style.display=ok?'':'none';});"
         "p.querySelectorAll('.lead-label').forEach(function(l){var h=l.nextElementSibling;"
         "l.style.display=(h&&h.style.display==='none')?'none':'';});"
         "p.querySelectorAll('.sec-label').forEach(function(lbl){var vis=false,n=lbl.nextElementSibling;"
         "while(n&&!n.classList.contains('sec-label')){"
         "if(n.hasAttribute('data-cat')&&n.style.display!=='none'){vis=true;break;}n=n.nextElementSibling;}"
         "lbl.style.display=vis?'':'none';});});}"
-        "function bindFilter(){document.querySelectorAll('.chip.cl').forEach(function(c){"
-        "c.onclick=function(){if(c.hasAttribute('data-clear')){cinF('','',null);return;}"
-        "cinF(c.getAttribute('data-fc')||'',c.getAttribute('data-fs')||'',c);};});}"
+        "function cinPaint(){"
+        "document.querySelectorAll('.chip.cl[data-fc]').forEach(function(c){c.classList.toggle('on',CF.cat!==''&&c.getAttribute('data-fc')===CF.cat)});"
+        "document.querySelectorAll('.chip.cl[data-fs]').forEach(function(c){c.classList.toggle('on',CF.sev!==''&&c.getAttribute('data-fs')===CF.sev)});"
+        "document.querySelectorAll('.stab').forEach(function(c){c.classList.toggle('on',c.getAttribute('data-fsrc')===CF.src)});}"
+        "function cinWeekly(){document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x.dataset.t==='weekly')});"
+        "document.querySelectorAll('.panel').forEach(function(s){s.classList.toggle('active',s.dataset.p==='weekly')});}"
+        "function bindFilter(){"
+        "document.querySelectorAll('.chip.cl').forEach(function(c){c.onclick=function(){"
+        "if(c.hasAttribute('data-clear')){CF.cat='';CF.sev='';}"
+        "else if(c.hasAttribute('data-fc')){var v=c.getAttribute('data-fc');CF.cat=(CF.cat===v?'':v);if(CF.cat)cinWeekly();}"
+        "else if(c.hasAttribute('data-fs')){var v=c.getAttribute('data-fs');CF.sev=(CF.sev===v?'':v);if(CF.sev)cinWeekly();}"
+        "cinPaint();cinApply();};});"
+        "document.querySelectorAll('.stab').forEach(function(c){c.onclick=function(){"
+        "var v=c.getAttribute('data-fsrc');CF.src=(CF.src===v?'':v);cinPaint();cinApply();};});}"
     )
 
     if encrypted is None:
