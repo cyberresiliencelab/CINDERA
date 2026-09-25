@@ -332,23 +332,20 @@ def _mobile_ribbons(digests, iocs) -> str:
             + (f'<span class="src2">{_esc(meta)}</span>' if meta else "") + '</a>')
     h_cells = h_cells[:50]
 
-    def _ribbon(cells, cls):
+    def _ribbon(cells, cls, direction):
         if not cells:
             return ""
         row = "".join(cells)
         dur = max(24, int(len(cells) * 2.4))
-        return (f'<div class="mribbon {cls}"><div class="mrib-track" '
+        return (f'<div class="mribbon {cls} {direction}"><div class="mrib-track" '
                 f'style="animation-duration:{dur}s">{row}{row}</div></div>')
 
-    cve_rib = _ribbon(cve_cells, "cve") or '<div class="rl-empty">No CVE numbers.</div>'
-    hash_rib = _ribbon(h_cells, "hash") or '<div class="rl-empty">No hash IOCs available.</div>'
-    return (
-        '<div class="mfoot">'
-        '<div class="mrib-l">CVE NUMBERS &middot; scroll</div>' + cve_rib
-        + '<div class="mrib-l">HASH IOCs &middot; scroll</div>' + hash_rib
-        + _DISCLAIMER
-        + '</div>'
-    )
+    cve_rib = _ribbon(cve_cells, "cve", "ltr") or '<div class="rl-empty">No CVE numbers.</div>'
+    hash_rib = _ribbon(h_cells, "hash", "rtl") or '<div class="rl-empty">No hash IOCs available.</div>'
+    cve_html = f'<div class="mrib mtop"><div class="mrib-l">CVE NUMBERS &middot; auto-scroll</div>{cve_rib}</div>'
+    hash_html = f'<div class="mrib mhash"><div class="mrib-l">HASH IOCs &middot; auto-scroll</div>{hash_rib}</div>'
+    disc_html = f'<div class="mfoot">{_DISCLAIMER}</div>'
+    return cve_html, hash_html, disc_html
 
 
 def render_inner(digests: dict[str, list[Item]], display=None, sources=None, iocs=None) -> str:
@@ -373,10 +370,11 @@ def render_inner(digests: dict[str, list[Item]], display=None, sources=None, ioc
     panels = "".join(
         _panel(p, digests.get(p, []), sections, section_limits, cap) for p, _ in _TABS
     )
+    mcve, mhash, mdisc = _mobile_ribbons(digests, iocs)
     side = f'<aside class="side">{dash}</aside>'
-    main = f'<div class="main"><div class="tabs">{tabs}</div>{strip}{panels}</div>'
+    main = f'<div class="main"><div class="tabs">{tabs}</div>{strip}{mhash}{panels}</div>'
     rail = _rail(digests, sources, iocs)
-    return f'<div class="layout">{side}{main}{rail}</div>{_mobile_ribbons(digests, iocs)}'
+    return f'{mcve}<div class="layout">{side}{main}{rail}</div>{mdisc}'
 
 
 _STYLE = """
@@ -495,9 +493,12 @@ body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 var(--font);
 .disclaimer b{color:var(--muted)}
 /* mobile CVE/hash ticker ribbons (hidden on wide desktop where the rail shows them) */
 .mfoot{margin-top:20px}
-.mrib-l{font-size:10.5px;font-weight:500;letter-spacing:1px;color:var(--muted-3);margin:16px 2px 7px}
+.mrib{margin-bottom:8px}
+.mrib.mtop{margin:0 0 16px}
+.mrib-l{font-size:10.5px;font-weight:600;letter-spacing:1px;color:var(--muted-3);margin:0 2px 7px}
 .mribbon{overflow:hidden;border:1px solid var(--border);border-radius:12px;background:var(--surface-1)}
-.mrib-track{display:inline-flex;flex-wrap:nowrap;white-space:nowrap;animation-name:mribscroll;animation-timing-function:linear;animation-iteration-count:infinite}
+.mrib-track{display:inline-flex;flex-wrap:nowrap;white-space:nowrap;animation-name:mribscroll;animation-timing-function:linear;animation-iteration-count:infinite;will-change:transform}
+.mribbon.ltr .mrib-track{animation-direction:reverse}
 .mribbon:hover .mrib-track,.mribbon:active .mrib-track{animation-play-state:paused}
 @keyframes mribscroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
 .mrib-i{display:inline-flex;align-items:center;gap:7px;padding:9px 14px;text-decoration:none;font-size:12px;color:var(--text-2);border-right:1px solid var(--border-3)}
@@ -505,7 +506,7 @@ body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 var(--font);
 .mrib-i .src2{color:var(--muted-3);font-size:10.5px}
 .mrib-i .hval{font-family:var(--mono);font-size:11px;color:var(--text-2)}
 @media (prefers-reduced-motion:reduce){.mrib-track{animation:none}.mribbon{overflow-x:auto}}
-@media (min-width:1240px){.mfoot .mribbon,.mfoot .mrib-l{display:none}}
+@media (min-width:1240px){.mrib{display:none}}
 /* right rail (desktop only) */
 .rail{display:none}
 .rail-sec{margin-bottom:22px}
@@ -664,6 +665,8 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
         "if(sc.scrollTop>=sc.scrollHeight/2)sc.scrollTop-=sc.scrollHeight/2;},45);}"
         "function bindActs(){if(window.innerWidth<920){"
         "document.querySelectorAll('.acts-d').forEach(function(d){d.removeAttribute('open')});}}"
+        "function hoistCve(){var r=document.querySelector('.mrib.mtop'),w=document.querySelector('.wrap');"
+        "if(r&&w&&r.parentNode!==w)w.insertBefore(r,w.firstChild);}"
         "function applyTheme(t){document.documentElement.dataset.theme=t;"
         "var b=document.getElementById('themeBtn');if(b)b.innerHTML=(t==='light'?'\\u263E':'\\u2600');}"
         "function bindTheme(){var s='dark';try{s=localStorage.getItem('cindera-theme')||'dark'}catch(e){}applyTheme(s);"
@@ -673,7 +676,7 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
     )
 
     if encrypted is None:
-        return head + f'<div id="app">{inner}</div>' + foot + f'<script>{tab_js}{filter_js}{extra_js}bindTabs();bindFilter();railAuto();bindActs();bindTheme();</script></body></html>'
+        return head + f'<div id="app">{inner}</div>' + foot + f'<script>{tab_js}{filter_js}{extra_js}bindTabs();bindFilter();railAuto();bindActs();bindTheme();hoistCve();</script></body></html>'
 
     gate = ('<div id="gate" class="gate"><div class="lk">&#128274;</div>'
             '<p>Members only. Enter the group passphrase.</p>'
@@ -691,7 +694,7 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
         "return dec.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:iv},k,ct));}"
         "async function attempt(p){try{document.getElementById('app').innerHTML=await unlock(p);"
         "document.getElementById('gate').style.display='none';"
-        "document.getElementById('app').style.display='block';bindTabs();bindFilter();railAuto();bindActs();bindTheme();return true;}catch(e){return false;}}"
+        "document.getElementById('app').style.display='block';bindTabs();bindFilter();railAuto();bindActs();bindTheme();hoistCve();return true;}catch(e){return false;}}"
         "document.getElementById('go').onclick=async function(){var p=document.getElementById('pw').value;"
         "if(!p){document.getElementById('err').textContent='Enter the passphrase';return;}"
         "document.getElementById('err').textContent='Checking…';"
