@@ -37,7 +37,7 @@ sources:
   - {name: CrowdStrike,          url: "https://www.crowdstrike.com/blog/feed",             tier: intel, category: intel, weight: 1.0}
   - {name: Check Point Research, url: "https://research.checkpoint.com/feed/",             tier: intel, category: intel, weight: 1.0}
   - {name: Google Project Zero,  url: "https://googleprojectzero.blogspot.com/feeds/posts/default", tier: intel, category: intel, weight: 1.2}
-  - {name: Fortinet (FortiGuard), url: "https://feeds.feedburner.com/fortinet/blog/threat-research", tier: intel, category: intel, weight: 1.1}
+  - {name: Fortinet (FortiGuard), url: "https://feeds.feedburner.com/fortinet/blog/threat-research", fallback_url: "https://www.fortinet.com/blog/threat-research/rss.xml", tier: intel, category: intel, weight: 1.1}
 
   # ---- Healthcare sources ----
   # Only HIPAA Journal is healthcare-only, so it's tagged health directly. DataBreaches

@@ -69,6 +69,33 @@ articles, still grouped under the four category headers. The source, coverage
 category chips, and severity chips combine as one filter (e.g. CrowdStrike + critical).
 Every article shows its absolute release date alongside the relative age.
 
+### Available-source filtering
+The source strip lists every configured feed, but shows only the ones that have
+items for the current tab (Daily/Weekly/Monthly) AND any active category/severity
+filter; the rest are hidden. Selecting a source that has nothing in the current
+view resets to All. Availability is computed live from the DOM in `cinUpdate()`.
+
+### Malicious-link screening (every build)
+`fetch._safe_link` drops items whose link is non-HTTPS, points to a raw-IP host or
+punycode/look-alike domain, carries credentials, is a direct executable download,
+or uses a URL shortener. It is heuristic, not a reputation service — for real domain
+reputation add a Google Safe Browsing lookup keyed by a repo secret. Fetch now also
+uses a browser User-Agent with retries and an optional per-source `fallback_url`.
+
+### Desktop right rail (continuous ticker)
+At >=1240px a third column appears: a scrolling quick-access rail with full CVE numbers
+published across the feeds (click to open) on top, and malware hash IOCs
+(source -> threat -> CVE, via abuse.ch ThreatFox + hashes found in feeds) below. Built server-side in `_rail()` from the weekly window; hidden below 1240px. The rail auto-scrolls as a seamless vertical ticker (content duplicated, CSS keyframes, speed scales with length); it pauses on hover so links stay clickable, and falls back to manual scrolling under prefers-reduced-motion. Layout is now 1-col (mobile) / 2-col (>=920px) / 3-col (>=1240px).
+
+### Responsive layout (mobile vs desktop)
+One page, two layouts via CSS. On phones/tablets it's a single column: summary,
+source strip, time tabs, then articles. At >=920px the `.layout` grid splits into a
+sticky left sidebar (coverage summary + source strip) and a wide main pane (tabs +
+articles), using the browser width instead of wasting it; the sidebar stays in view
+while the article list scrolls. All filtering/tab JS uses global selectors, so it
+works identically in both layouts. Note: the local wkhtmltoimage renderer can't show
+CSS grid (ancient WebKit) — verify the desktop layout in a real browser or devtools.
+
 ### Coverage dashboard
 The encrypted page opens with a compact **coverage panel** over the last 7 days:
 category totals (advisories / intel / healthcare / news), a critical/high count,
