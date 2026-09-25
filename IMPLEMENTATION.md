@@ -178,3 +178,25 @@ loop left->right (duplicated track, CSS keyframes), pause on tap/hover, and fall
 to manual horizontal scroll under prefers-reduced-motion. Hidden at >=1240px. The
 disclaimer now lives inside the encrypted content (so the ribbons can bracket it and
 nothing leaks on the locked page); the footer keeps only the share + members-only line.
+
+### Typography & rail scroll refresh
+- Inter (UI) + JetBrains Mono (CVE/hash) via Google Fonts; larger brand (gradient),
+  hero, row, tab and rail type.
+- Right-rail CVE panel: month -> CVE number + one-line description + source, in sequence.
+- Rail now scrolls manually (overflow-y:auto) AND auto-scrolls via JS (`railAuto`),
+  which pauses on hover/wheel/touch so you can scroll up/down freely.
+- Per-source activity is a dropdown (`<details>`), auto-collapsed on mobile via `bindActs`.
+
+### Theme tokens (restyle in one place)
+The stylesheet opens with a `:root{}` block of named CSS variables — fonts, surfaces,
+text shades, accent, status colors and radii. Every rule references them via `var()`,
+so changing a value there restyles the whole app (browser + mobile) without touching
+any Python. Swap `--font`/`--mono` for different typefaces (add the matching Google
+Fonts <link>), or recolour by editing the palette. It's a dark theme; a light theme is
+just an alternate set of these values.
+
+### Light theme + toggle
+A `:root[data-theme="light"]` block redefines the same tokens with light values. A
+toggle button (top bar) flips `document.documentElement.dataset.theme` and saves the
+choice to localStorage (per viewer, per browser). An inline head script applies the
+saved theme before first paint to avoid a flash. Default is dark.
