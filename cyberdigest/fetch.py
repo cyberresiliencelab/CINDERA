@@ -261,6 +261,38 @@ def fetch_iocs(limit: int = 40) -> list[dict]:
     return iocs
 
 
+_HASH_RE = re.compile(r"\b[a-fA-F0-9]{64}\b|\b[a-fA-F0-9]{40}\b|\b[a-fA-F0-9]{32}\b")
+
+
+def rescan_hashes(items: list[Item], limit: int = 12) -> list[dict]:
+    """For feeds that don't publish hashes in their RSS, fetch the article page
+    (bounded) and extract file hashes. Prioritises intel/advisory items whose
+    summary has no hash. Never raises; each fetch is best-effort."""
+    out: list[dict] = []
+    tried = 0
+    for it in items:
+        if tried >= limit:
+            break
+        if it.tier not in ("intel", "advisory"):
+            continue
+        if _HASH_RE.search(it.summary or ""):
+            continue  # RSS already had a hash
+        tried += 1
+        try:
+            html = _http_get(it.link, timeout=20).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            continue
+        text = _HTML.sub(" ", html)
+        cve = _CVE_RE.search(it.title + " " + text)
+        for h in dict.fromkeys(_HASH_RE.findall(text)):   # unique, ordered
+            kind = {32: "MD5", 40: "SHA1", 64: "SHA256"}.get(len(h), "")
+            out.append({"hash": h, "htype": kind, "malware": it.source,
+                        "cve": cve.group(0).upper() if cve else "", "link": it.link})
+    if out:
+        print(f"  · Article rescan: {len(out)} hashes from {tried} pages")
+    return out
+
+
 def dedupe(items: list[Item]) -> list[Item]:
     """Collapse the same story reported by multiple outlets, keeping the
     highest-weight source and remembering the others for cross-referencing."""

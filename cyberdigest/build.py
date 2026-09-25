@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 
-from .fetch import collect, fetch_iocs
+from .fetch import collect, fetch_iocs, rescan_hashes
 from .rank import rank
 from .site import build_encrypted, build_plain, render_inner
 
@@ -49,7 +49,13 @@ def main() -> int:
     for period in ("daily", "weekly", "monthly"):
         digests[period] = rank(collect(cfg["sources"], period), cfg)
 
-    iocs = fetch_iocs() if cfg.get("iocs", True) else []
+    iocs = []
+    if cfg.get("iocs", True):
+        iocs = fetch_iocs()
+        # rescan a bounded set of feeds that didn't publish hashes in their RSS
+        rescan_n = int(cfg.get("hash_rescan", 12))
+        if rescan_n:
+            iocs = iocs + rescan_hashes(digests.get("weekly", []), limit=rescan_n)
 
     passphrase = os.environ.get("PAGE_PASSPHRASE", "").strip()
     if passphrase:

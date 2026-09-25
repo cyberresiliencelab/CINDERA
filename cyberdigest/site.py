@@ -144,19 +144,12 @@ def _panel(period: str, items: list[Item], sections, section_limits, cap) -> str
     return f'<section class="panel{active}" data-p="{period}">{body}</section>'
 
 
-def _dashboard(digests, sources, sections) -> str:
-    """Compact coverage summary over the recent (weekly) window: category +
-    severity chips, plus an expandable per-source activity list (all configured
-    sources, so a feed sitting at 0 is visible = quiet or broken)."""
+def _dash_window(period, window, src_names, sections) -> str:
     from collections import Counter
-    window = digests.get("weekly") or digests.get("monthly") or digests.get("daily") or []
-    src_names = [s["name"] for s in sources] if sources else sorted({i.source for i in window})
-
     by_cat = Counter(getattr(i, "category", "news") for i in window)
     by_src = Counter(i.source for i in window)
     crit = sum(1 for i in window if i.severity == "critical")
     high = sum(1 for i in window if i.severity == "high")
-
     short = {"advisories": "advisories", "intel": "intel", "health": "healthcare", "news": "news"}
     ccls = {"advisories": "c-adv", "intel": "c-intel", "health": "c-health", "news": "c-news"}
     chips = [f'<span class="chip cl" data-clear="1"><b>{len(window)}</b> items</span>']
@@ -179,16 +172,25 @@ def _dashboard(digests, sources, sections) -> str:
                  f'<span class="sbar"><i style="width:{pct}%"></i></span>'
                  f'<span class="sc">{c}</span></div>')
     live = sum(1 for _, c in counts if c > 0)
-
+    lbl = {"daily": "TODAY", "weekly": "LAST 7 DAYS", "monthly": "LAST 31 DAYS"}.get(period, period.upper())
+    active = " active" if period == "daily" else ""
     return (
-        '<div class="dash"><div class="dash-h">COVERAGE &middot; LAST 7 DAYS '
-        '&middot; <span class="hint">tap to filter</span></div>'
+        f'<div class="dashwin{active}" data-w="{period}">'
+        f'<div class="dash-h">COVERAGE &middot; {lbl} &middot; <span class="hint">tap to filter</span></div>'
         f'<div class="chips">{"".join(chips)}</div>'
-        f'<details class="srcs-t"><summary>Per-source activity &middot; {live}/{len(counts)} active</summary>'
-        f'<div class="srcs">{rows}</div>'
-        '<div class="dnote">Bars are item counts over the last 7 days. '
-        '0 = quiet this week, or the feed needs attention.</div></details></div>'
+        f'<div class="acts-l">Per-source activity &middot; {live}/{len(counts)} active</div>'
+        f'<div class="srcs">{rows}</div></div>'
     )
+
+
+def _dashboard(digests, sources, sections) -> str:
+    """Timeline-aware coverage panel: category/severity chips + a per-source
+    activity graph, rendered for each window and toggled to match the active tab."""
+    allsrc = digests.get("monthly") or digests.get("weekly") or digests.get("daily") or []
+    src_names = [s["name"] for s in sources] if sources else sorted({i.source for i in allsrc})
+    wins = "".join(_dash_window(p, digests.get(p, []), src_names, sections)
+                   for p in ("daily", "weekly", "monthly"))
+    return f'<div class="dash">{wins}</div>'
 
 
 def _rail(digests, sources, iocs=None) -> str:
@@ -200,10 +202,13 @@ def _rail(digests, sources, iocs=None) -> str:
     window = digests.get("weekly") or digests.get("monthly") or digests.get("daily") or []
     cve_re = _re.compile(r"CVE-\d{4}-\d{4,7}", _re.I)
 
-    # ---- TOP: CVE numbers ----
+    # ---- TOP: CVE Status — month -> source -> CVE numbers ----
+    from collections import OrderedDict
+    monthly = digests.get("monthly") or window
     seen: set = set()
-    cve_rows = []
-    for it in window:  # score-ordered
+    tree: "OrderedDict[str, tuple]" = OrderedDict()
+    cve_count = 0
+    for it in monthly:  # score-ordered
         cves = [t.upper() for t in it.tags if cve_re.fullmatch(t or "")]
         if not cves:
             cves = [c.upper() for c in cve_re.findall(it.title + " " + it.summary)]
@@ -211,12 +216,23 @@ def _rail(digests, sources, iocs=None) -> str:
             if c in seen:
                 continue
             seen.add(c)
-            cve_rows.append((c, it.source, it.link))
-    cve_html = "".join(
-        f'<a class="rl" href="{_esc(link)}" target="_blank" rel="noopener">'
-        f'<span class="cid">{_esc(cid)}</span><span class="rl-src">{_esc(src)}</span></a>'
-        for cid, src, link in cve_rows[:80]
-    ) or '<div class="rl-empty">No CVE numbers in this window.</div>'
+            cve_count += 1
+            mk = f"{it.published:%Y-%m}"
+            ml = f"{it.published:%B %Y}"
+            month = tree.setdefault(mk, (ml, OrderedDict()))
+            month[1].setdefault(it.source, []).append((c, it.link))
+    cve_html = ""
+    for mk in sorted(tree, reverse=True):
+        ml, srcs = tree[mk]
+        cve_html += f'<div class="cve-month">{_esc(ml)}</div>'
+        for src in sorted(srcs, key=str.lower):
+            ids = "".join(
+                f'<a class="cveid" href="{_esc(link)}" target="_blank" rel="noopener">{_esc(c)}</a>'
+                for c, link in srcs[src]
+            )
+            cve_html += f'<div class="cve-src">{_esc(src)}</div><div class="cve-ids">{ids}</div>'
+    cve_html = cve_html or '<div class="rl-empty">No CVE numbers in this window.</div>'
+    cve_rows = list(seen)  # for duration scaling below
 
     # ---- BOTTOM: hash IOCs ----
     hseen: set = set()
@@ -254,8 +270,8 @@ def _rail(digests, sources, iocs=None) -> str:
         'build runner so ThreatFox can be reached.</div>')
 
     body = (
-        f'<div class="rail-sec"><div class="rail-h">CVE NUMBERS</div>'
-        f'<div class="rail-list">{cve_html}</div></div>'
+        f'<div class="rail-sec"><div class="rail-h">CVE STATUS &middot; month / source</div>'
+        f'<div class="rail-list cve-tree">{cve_html}</div></div>'
         f'<div class="rail-sec"><div class="rail-h">HASH IOCs &middot; source / threat / CVE</div>'
         f'<div class="rail-list">{hash_html}</div></div>'
     )
@@ -267,6 +283,74 @@ def _rail(digests, sources, iocs=None) -> str:
         '<aside class="rail"><div class="rail-scroll">'
         f'<div class="rail-track" style="animation-duration:{dur}s">{body}{body}</div>'
         '</div></aside>'
+    )
+
+
+_DISCLAIMER = (
+    '<div class="disclaimer"><b>Disclaimer.</b> Cindera aggregates headlines from '
+    'third-party public feeds. Items are not individually verified or endorsed, and every '
+    'link opens an external site. Automated screening drops obviously malicious links '
+    '(non-HTTPS, IP hosts, look-alike domains, direct downloads, shorteners) but is not a '
+    'guarantee &mdash; always confirm an item&#39;s authenticity and legitimacy at the '
+    'original source before acting.</div>'
+)
+
+
+def _mobile_ribbons(digests, iocs) -> str:
+    """Mobile/tablet horizontal tickers: CVE numbers above the disclaimer, hash
+    IOCs below it. Hidden on wide desktop where the right rail shows the same."""
+    import re as _re
+    monthly = digests.get("monthly") or digests.get("weekly") or digests.get("daily") or []
+    cve_re = _re.compile(r"CVE-\d{4}-\d{4,7}", _re.I)
+
+    seen: set = set()
+    cve_cells = []
+    for it in monthly:
+        cves = [t.upper() for t in it.tags if cve_re.fullmatch(t or "")]
+        if not cves:
+            cves = [c.upper() for c in cve_re.findall(it.title + " " + it.summary)]
+        for c in cves:
+            if c in seen:
+                continue
+            seen.add(c)
+            cve_cells.append(
+                f'<a class="mrib-i" href="{_esc(it.link)}" target="_blank" rel="noopener">'
+                f'<span class="cid2">{_esc(c)}</span>'
+                f'<span class="src2">{_esc(it.source)}</span></a>')
+    cve_cells = cve_cells[:50]
+
+    hseen: set = set()
+    h_cells = []
+    for io in (iocs or []):
+        h = io.get("hash", "")
+        if not h or h in hseen:
+            continue
+        hseen.add(h)
+        short = h if len(h) <= 18 else f"{h[:10]}\u2026{h[-6:]}"
+        meta = " ".join(x for x in (io.get("malware", ""), io.get("cve", "")) if x)
+        h_cells.append(
+            f'<a class="mrib-i" href="{_esc(io.get("link","#"))}" target="_blank" rel="noopener" '
+            f'title="{_esc(h)}"><span class="htag">{_esc(io.get("htype",""))}</span>'
+            f'<span class="hval">{_esc(short)}</span>'
+            + (f'<span class="src2">{_esc(meta)}</span>' if meta else "") + '</a>')
+    h_cells = h_cells[:50]
+
+    def _ribbon(cells, cls):
+        if not cells:
+            return ""
+        row = "".join(cells)
+        dur = max(24, int(len(cells) * 2.4))
+        return (f'<div class="mribbon {cls}"><div class="mrib-track" '
+                f'style="animation-duration:{dur}s">{row}{row}</div></div>')
+
+    cve_rib = _ribbon(cve_cells, "cve") or '<div class="rl-empty">No CVE numbers.</div>'
+    hash_rib = _ribbon(h_cells, "hash") or '<div class="rl-empty">No hash IOCs available.</div>'
+    return (
+        '<div class="mfoot">'
+        '<div class="mrib-l">CVE NUMBERS &middot; scroll</div>' + cve_rib
+        + '<div class="mrib-l">HASH IOCs &middot; scroll</div>' + hash_rib
+        + _DISCLAIMER
+        + '</div>'
     )
 
 
@@ -292,10 +376,10 @@ def render_inner(digests: dict[str, list[Item]], display=None, sources=None, ioc
     panels = "".join(
         _panel(p, digests.get(p, []), sections, section_limits, cap) for p, _ in _TABS
     )
-    side = f'<aside class="side">{dash}{strip}</aside>'
-    main = f'<div class="main"><div class="tabs">{tabs}</div>{panels}</div>'
+    side = f'<aside class="side">{dash}</aside>'
+    main = f'<div class="main"><div class="tabs">{tabs}</div>{strip}{panels}</div>'
     rail = _rail(digests, sources, iocs)
-    return f'<div class="layout">{side}{main}{rail}</div>'
+    return f'<div class="layout">{side}{main}{rail}</div>{_mobile_ribbons(digests, iocs)}'
 
 
 _STYLE = """
@@ -333,16 +417,20 @@ body{margin:0;background:#0a0e16;color:#f4f7fb;font:16px/1.5 -apple-system,Segoe
 .rtitle{font-size:14px;font-weight:500;line-height:1.35;color:#e6ecf5;margin-bottom:3px}
 .rmeta{font-size:11.5px;color:#7c8699}
 .empty{color:#7c8699;text-align:center;padding:36px 0}
-.share{width:100%;background:#6ee7d6;color:#08201c;border:none;border-radius:12px;padding:13px;font-size:14px;font-weight:500;margin-top:20px;display:flex;align-items:center;justify-content:center;gap:7px;text-decoration:none}
+.share-wrap{text-align:center;margin-top:22px}
+.share{display:inline-flex;width:auto;background:#6ee7d6;color:#08201c;border:none;border-radius:999px;padding:10px 20px;font-size:13px;font-weight:600;align-items:center;justify-content:center;gap:7px;text-decoration:none}
+.share:hover{background:#8af0e1}
 .foot{text-align:center;font-size:11.5px;color:#5a6274;margin-top:14px}
-.gate{max-width:320px;margin:50px auto;text-align:center}
-.gate .lk{font-size:34px;color:#6ee7d6}
-.gate p{color:#aab4c7;font-size:14px}
+.gate{max-width:380px;margin:9vh auto;text-align:center;background:#131a27;border:1px solid #232c3d;border-radius:20px;padding:36px 30px}
+.gate .lk{font-size:42px;color:#6ee7d6;line-height:1}
+.gate p{color:#aab4c7;font-size:14px;margin:14px 0 4px}
 .gate input{width:100%;padding:12px;font-size:16px;border-radius:12px;border:1px solid #232c3d;background:#161d2b;color:#f4f7fb;margin:12px 0}
 .gate button{width:100%;padding:12px;font-size:15px;font-weight:500;border:none;border-radius:12px;background:#6ee7d6;color:#08201c;cursor:pointer}
 .err{color:#ff8080;font-size:13px;min-height:18px;margin-top:8px}
 .dash{background:#131a27;border:1px solid #232c3d;border-radius:14px;padding:13px 13px 11px;margin-bottom:18px}
 .dash-h{font-size:11px;font-weight:500;letter-spacing:1px;color:#7c8699;margin-bottom:10px}
+.dashwin{display:none}.dashwin.active{display:block}
+.acts-l{font-size:11px;font-weight:500;letter-spacing:1px;color:#7c8699;margin:14px 0 8px}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{font-size:11.5px;color:#9aa6bd;background:#0f1622;border:1px solid #232c3d;padding:4px 9px;border-radius:999px}
 .chip b{color:#f4f7fb;font-weight:600}
@@ -360,6 +448,19 @@ body{margin:0;background:#0a0e16;color:#f4f7fb;font:16px/1.5 -apple-system,Segoe
 .stab.on{background:#6ee7d6;border-color:#6ee7d6;color:#08110f;font-weight:600}
 .disclaimer{margin-top:18px;padding:11px 13px;background:#0f1622;border:1px solid #232c3d;border-radius:12px;font-size:11px;line-height:1.55;color:#7c8699}
 .disclaimer b{color:#9aa6bd}
+/* mobile CVE/hash ticker ribbons (hidden on wide desktop where the rail shows them) */
+.mfoot{margin-top:20px}
+.mrib-l{font-size:10.5px;font-weight:500;letter-spacing:1px;color:#7c8699;margin:16px 2px 7px}
+.mribbon{overflow:hidden;border:1px solid #232c3d;border-radius:12px;background:#0f1622}
+.mrib-track{display:inline-flex;flex-wrap:nowrap;white-space:nowrap;animation-name:mribscroll;animation-timing-function:linear;animation-iteration-count:infinite}
+.mribbon:hover .mrib-track,.mribbon:active .mrib-track{animation-play-state:paused}
+@keyframes mribscroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.mrib-i{display:inline-flex;align-items:center;gap:7px;padding:9px 14px;text-decoration:none;font-size:12px;color:#c3ccdb;border-right:1px solid #1a2230}
+.mrib-i .cid2{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:600;color:#6ee7d6}
+.mrib-i .src2{color:#7c8699;font-size:10.5px}
+.mrib-i .hval{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#c3ccdb}
+@media (prefers-reduced-motion:reduce){.mrib-track{animation:none}.mribbon{overflow-x:auto}}
+@media (min-width:1240px){.mfoot .mribbon,.mfoot .mrib-l{display:none}}
 /* right rail (desktop only) */
 .rail{display:none}
 .rail-sec{margin-bottom:22px}
@@ -369,6 +470,13 @@ body{margin:0;background:#0a0e16;color:#f4f7fb;font:16px/1.5 -apple-system,Segoe
 .rl:hover{background:#131a27}
 .cid{display:inline-block;font-weight:600;color:#6ee7d6;font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace;margin-right:8px}
 .rl-src{color:#7c8699;font-size:11px}
+.cve-tree{gap:0}
+.cve-month{font-size:11px;font-weight:600;letter-spacing:.5px;color:#f4f7fb;background:#12202a;padding:5px 9px;border-radius:7px;margin:10px 0 6px}
+.cve-month:first-child{margin-top:0}
+.cve-src{font-size:11px;color:#8ea0b8;margin:7px 0 4px 2px}
+.cve-ids{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:4px}
+.cveid{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;font-weight:600;color:#6ee7d6;background:#0f1622;border:1px solid #232c3d;border-radius:6px;padding:2px 7px;text-decoration:none}
+.cveid:hover{border-color:#3a8f82;background:#12202a}
 .hrow{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px}
 .htag{font-size:9.5px;font-weight:600;letter-spacing:.5px;color:#08110f;background:#6ee7d6;border-radius:5px;padding:1px 5px}
 .hval{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#c3ccdb}
@@ -441,13 +549,7 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
             f'<span class="mk">&#128737;</span><span class="nm">{_esc(name.upper())}</span></div>'
             f'<span class="pill"><span class="live"></span>Updated {now:%H:%M} UTC</span></div>'
             f'<div class="tag">{_esc(tagline)} &middot; {now:%a %d %b %Y} UTC</div>')
-    foot = (f'<a class="share" href="{wa}">&#128172; Share to group</a>'
-            f'<div class="disclaimer"><b>Disclaimer.</b> Cindera aggregates headlines from '
-            f'third-party public feeds. Items are not individually verified or endorsed, and every '
-            f'link opens an external site. Automated screening drops obviously malicious links '
-            f'(non-HTTPS, IP hosts, look-alike domains, direct downloads, shorteners) but is not a '
-            f'guarantee &mdash; always confirm an item&#39;s authenticity and legitimacy at the '
-            f'original source before acting.</div>'
+    foot = (f'<div class="share-wrap"><a class="share" href="{wa}">&#128172; Share to group</a></div>'
             f'<div class="foot">Members only &middot; every item links to its source. '
             f'Verify before acting.</div></div>')
 
@@ -455,6 +557,7 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
               "t.onclick=function(){var p=t.dataset.t;"
               "document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x===t)});"
               "document.querySelectorAll('.panel').forEach(function(s){s.classList.toggle('active',s.dataset.p===p)});"
+              "document.querySelectorAll('.dashwin').forEach(function(w){w.classList.toggle('active',w.dataset.w===p)});"
               "if(window.cinUpdate)cinUpdate();"
               "};});}")
 
@@ -492,8 +595,8 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
         "function bindFilter(){"
         "document.querySelectorAll('.chip.cl').forEach(function(c){c.onclick=function(){"
         "if(c.hasAttribute('data-clear')){CF.cat='';CF.sev='';}"
-        "else if(c.hasAttribute('data-fc')){var v=c.getAttribute('data-fc');CF.cat=(CF.cat===v?'':v);if(CF.cat)cinWeekly();}"
-        "else if(c.hasAttribute('data-fs')){var v=c.getAttribute('data-fs');CF.sev=(CF.sev===v?'':v);if(CF.sev)cinWeekly();}"
+        "else if(c.hasAttribute('data-fc')){var v=c.getAttribute('data-fc');CF.cat=(CF.cat===v?'':v);}"
+        "else if(c.hasAttribute('data-fs')){var v=c.getAttribute('data-fs');CF.sev=(CF.sev===v?'':v);}"
         "cinUpdate();};});"
         "document.querySelectorAll('.stab').forEach(function(c){c.onclick=function(){"
         "if(c.style.display==='none')return;"
