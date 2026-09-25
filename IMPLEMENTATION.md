@@ -161,3 +161,20 @@ PAGE_PASSPHRASE="reef tiger otter" python -m cyberdigest.build --out public
   that happens.
 - Pick a strong passphrase; weak ones are brute-forceable offline against the ciphertext.
 - Summaries come from feed text — every item links to its source; verify before acting.
+
+### Desktop redesign notes
+- Column 1 holds only the coverage dashboard; its chips + per-source activity graph
+  are timeline-aware (three `.dashwin` blocks toggled with the Daily/Weekly/Monthly tab).
+- The Browse-by-source ribbon now lives in column 2, below the tabs and above the lead.
+- Right-rail CVE panel is grouped released-month -> source -> CVE numbers; hashes below.
+- `rescan_hashes()` fetches article pages for feeds that don't publish hashes in RSS
+  (bounded by `hash_rescan` in feeds.yaml, default 12).
+- Login gate is a centered card; the Share button is a compact pill.
+
+### Mobile ticker ribbons
+On mobile/tablet (where the right rail is hidden) two horizontal auto-scroll ribbons
+bracket the disclaimer: CVE numbers above, hash IOCs below (`_mobile_ribbons`). They
+loop left->right (duplicated track, CSS keyframes), pause on tap/hover, and fall back
+to manual horizontal scroll under prefers-reduced-motion. Hidden at >=1240px. The
+disclaimer now lives inside the encrypted content (so the ribbons can bracket it and
+nothing leaks on the locked page); the footer keeps only the share + members-only line.
