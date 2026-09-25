@@ -497,15 +497,11 @@ body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 var(--font);
 .mrib.mtop{margin:0 0 16px}
 .mrib-l{font-size:10.5px;font-weight:600;letter-spacing:1px;color:var(--muted-3);margin:0 2px 7px}
 .mribbon{overflow:hidden;border:1px solid var(--border);border-radius:12px;background:var(--surface-1)}
-.mrib-track{display:inline-flex;flex-wrap:nowrap;white-space:nowrap;animation-name:mribscroll;animation-timing-function:linear;animation-iteration-count:infinite;will-change:transform}
-.mribbon.ltr .mrib-track{animation-direction:reverse}
-.mribbon:hover .mrib-track,.mribbon:active .mrib-track{animation-play-state:paused}
-@keyframes mribscroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.mrib-track{display:inline-flex;flex-wrap:nowrap;white-space:nowrap;will-change:transform}
 .mrib-i{display:inline-flex;align-items:center;gap:7px;padding:9px 14px;text-decoration:none;font-size:12px;color:var(--text-2);border-right:1px solid var(--border-3)}
 .mrib-i .cid2{font-family:var(--mono);font-weight:600;color:var(--accent)}
 .mrib-i .src2{color:var(--muted-3);font-size:10.5px}
 .mrib-i .hval{font-family:var(--mono);font-size:11px;color:var(--text-2)}
-@media (prefers-reduced-motion:reduce){.mrib-track{animation:none}.mribbon{overflow-x:auto}}
 @media (min-width:1240px){.mrib{display:none}}
 /* right rail (desktop only) */
 .rail{display:none}
@@ -667,6 +663,19 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
         "document.querySelectorAll('.acts-d').forEach(function(d){d.removeAttribute('open')});}}"
         "function hoistCve(){var r=document.querySelector('.mrib.mtop'),w=document.querySelector('.wrap');"
         "if(r&&w&&r.parentNode!==w)w.insertBefore(r,w.firstChild);}"
+        "function tickers(){document.querySelectorAll('.mrib .mribbon').forEach(function(mb){"
+        "var tr=mb.querySelector('.mrib-track');if(!tr)return;"
+        "var ltr=mb.classList.contains('ltr');var sp=ltr?0.5:-0.5;var w=0,x=0,init=false,paused=false;"
+        "mb.addEventListener('mouseenter',function(){paused=true});"
+        "mb.addEventListener('mouseleave',function(){paused=false});"
+        "mb.addEventListener('touchstart',function(){paused=true},{passive:true});"
+        "mb.addEventListener('touchend',function(){setTimeout(function(){paused=false},1500)},{passive:true});"
+        "function step(){"
+        "if(!init){w=tr.scrollWidth/2;if(w){x=ltr?-w:0;init=true;}}"
+        "if(init&&!paused){x+=sp;"
+        "if(x<=-w){w=tr.scrollWidth/2||w;x+=w;}else if(x>=0){w=tr.scrollWidth/2||w;x-=w;}"
+        "tr.style.transform='translateX('+x+'px)';}"
+        "requestAnimationFrame(step);}requestAnimationFrame(step);});}"
         "function applyTheme(t){document.documentElement.dataset.theme=t;"
         "var b=document.getElementById('themeBtn');if(b)b.innerHTML=(t==='light'?'\\u263E':'\\u2600');}"
         "function bindTheme(){var s='dark';try{s=localStorage.getItem('cindera-theme')||'dark'}catch(e){}applyTheme(s);"
@@ -676,7 +685,7 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
     )
 
     if encrypted is None:
-        return head + f'<div id="app">{inner}</div>' + foot + f'<script>{tab_js}{filter_js}{extra_js}bindTabs();bindFilter();railAuto();bindActs();bindTheme();hoistCve();</script></body></html>'
+        return head + f'<div id="app">{inner}</div>' + foot + f'<script>{tab_js}{filter_js}{extra_js}bindTabs();bindFilter();railAuto();bindActs();bindTheme();hoistCve();tickers();</script></body></html>'
 
     gate = ('<div id="gate" class="gate"><div class="lk">&#128274;</div>'
             '<p>Members only. Enter the group passphrase.</p>'
@@ -694,7 +703,7 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
         "return dec.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:iv},k,ct));}"
         "async function attempt(p){try{document.getElementById('app').innerHTML=await unlock(p);"
         "document.getElementById('gate').style.display='none';"
-        "document.getElementById('app').style.display='block';bindTabs();bindFilter();railAuto();bindActs();bindTheme();hoistCve();return true;}catch(e){return false;}}"
+        "document.getElementById('app').style.display='block';bindTabs();bindFilter();railAuto();bindActs();bindTheme();hoistCve();tickers();return true;}catch(e){return false;}}"
         "document.getElementById('go').onclick=async function(){var p=document.getElementById('pw').value;"
         "if(!p){document.getElementById('err').textContent='Enter the passphrase';return;}"
         "document.getElementById('err').textContent='Checking…';"
