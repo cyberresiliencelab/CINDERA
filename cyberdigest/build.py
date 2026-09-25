@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 
-from .fetch import collect
+from .fetch import collect, fetch_iocs
 from .rank import rank
 from .site import build_encrypted, build_plain, render_inner
 
@@ -49,14 +49,16 @@ def main() -> int:
     for period in ("daily", "weekly", "monthly"):
         digests[period] = rank(collect(cfg["sources"], period), cfg)
 
+    iocs = fetch_iocs() if cfg.get("iocs", True) else []
+
     passphrase = os.environ.get("PAGE_PASSPHRASE", "").strip()
     if passphrase:
-        inner = render_inner(digests, cfg.get("display"), cfg.get("sources"))
+        inner = render_inner(digests, cfg.get("display"), cfg.get("sources"), iocs)
         salt_b64, iv_b64, ct_b64 = _encrypt(inner, passphrase)
         page = build_encrypted(salt_b64, iv_b64, ct_b64, PBKDF2_ITERS, args.share_url, brand)
         mode = f"ENCRYPTED (AES-256-GCM, PBKDF2 {PBKDF2_ITERS} iters)"
     else:
-        page = build_plain(digests, args.share_url, brand, cfg.get("display"), cfg.get("sources"))
+        page = build_plain(digests, args.share_url, brand, cfg.get("display"), cfg.get("sources"), iocs)
         mode = "PLAIN (public) — set PAGE_PASSPHRASE to lock it"
 
     out = Path(args.out)

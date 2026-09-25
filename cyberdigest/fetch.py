@@ -13,8 +13,66 @@ from urllib.request import Request, urlopen
 
 import feedparser
 
-# Be a polite bot; some feeds reject the default UA.
-_UA = "CyberDigestBot/1.0 (+https://github.com/your-org/cyber-digest)"
+# A real browser UA — many feeds (Cloudflare/Feedburner-fronted) 403 a bot UA.
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+_HDRS = {
+    "User-Agent": _UA,
+    "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, text/html, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def _http_get(url: str, timeout: int = 25, tries: int = 3) -> bytes:
+    """Fetch bytes with a browser UA and simple backoff retries."""
+    last: Exception | None = None
+    for i in range(tries):
+        try:
+            with urlopen(Request(url, headers=_HDRS), timeout=timeout) as r:
+                return r.read()
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            time.sleep(1.2 * (i + 1))
+    raise last if last else RuntimeError("unreachable")
+
+
+# ---- Malicious-link screening (runs on every build) --------------------------
+# Drops the common signals of an injected / malicious / spam link before the item
+# is ever shown. This is heuristic, not a reputation service — real domain
+# reputation needs an API (e.g. Google Safe Browsing); see _reputation_ok hook.
+_SHORTENERS = {"bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "buff.ly",
+               "cutt.ly", "is.gd", "rb.gy", "rebrand.ly", "shorturl.at", "adf.ly"}
+_BAD_EXT = re.compile(r"\.(exe|apk|scr|msi|bat|cmd|dll|jar|vbs|ps1|hta|iso)(\?|#|$)", re.I)
+_IP_HOST = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+
+
+def _safe_link(link: str) -> bool:
+    """True if the link is safe to surface. Conservative: only rejects on strong
+    malicious signals so legitimate off-domain links are not dropped."""
+    if not link:
+        return False
+    try:
+        p = urlparse(link)
+    except Exception:  # noqa: BLE001
+        return False
+    if p.scheme not in ("http", "https"):
+        return False
+    netloc = p.netloc.lower()
+    if "@" in netloc:                      # credentials embedded in URL
+        return False
+    host = netloc.split(":")[0]
+    if not host or "." not in host:
+        return False
+    if _IP_HOST.match(host):               # raw IP address host
+        return False
+    if host.startswith("xn--") or ".xn--" in host:  # punycode / lookalike
+        return False
+    reg = ".".join(host.split(".")[-2:])
+    if reg in _SHORTENERS:                  # masked destination
+        return False
+    if _BAD_EXT.search(p.path or ""):       # direct executable download
+        return False
+    return True
 
 
 @dataclass
@@ -61,18 +119,27 @@ def _parse_date(entry) -> datetime:
 
 
 def fetch_source(src: dict, since: datetime) -> list[Item]:
-    """Fetch one source. Never raises — a dead feed must not kill the run."""
+    """Fetch one source. Never raises — a dead feed must not kill the run.
+    Tries the primary URL then an optional fallback_url, with retries."""
     items: list[Item] = []
-    try:
-        parsed = feedparser.parse(src["url"], agent=_UA)
-    except Exception as exc:  # noqa: BLE001 - resilience over precision
-        print(f"  ! {src['name']}: fetch failed ({exc})")
+    raw_bytes: bytes | None = None
+    for url in (src["url"], src.get("fallback_url")):
+        if not url:
+            continue
+        try:
+            raw_bytes = _http_get(url)
+            break
+        except Exception as exc:  # noqa: BLE001 - resilience over precision
+            print(f"  ! {src['name']}: fetch failed on {url} ({exc})")
+    if raw_bytes is None:
         return items
 
+    parsed = feedparser.parse(raw_bytes)
     if getattr(parsed, "bozo", 0) and not parsed.entries:
         print(f"  ! {src['name']}: unreadable feed, skipping")
         return items
 
+    dropped = 0
     for e in parsed.entries:
         pub = _parse_date(e)
         if pub < since:
@@ -80,6 +147,9 @@ def fetch_source(src: dict, since: datetime) -> list[Item]:
         title = _WS.sub(" ", (e.get("title") or "").strip())
         link = e.get("link") or ""
         if not title or not link:
+            continue
+        if not _safe_link(link):            # daily malicious-link screen
+            dropped += 1
             continue
         items.append(
             Item(
@@ -93,7 +163,8 @@ def fetch_source(src: dict, since: datetime) -> list[Item]:
                 category=src.get("category", src.get("tier", "news")),
             )
         )
-    print(f"  · {src['name']}: {len(items)} in window")
+    tail = f" ({dropped} unsafe dropped)" if dropped else ""
+    print(f"  · {src['name']}: {len(items)} in window{tail}")
     return items
 
 
@@ -139,6 +210,55 @@ def fetch_cisa_kev(src: dict, since: datetime) -> list[Item]:
         items.append(it)
     print(f"  · {src['name']}: {len(items)} in window")
     return items
+
+
+_CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.I)
+
+
+def _parse_threatfox(text: str, limit: int) -> list[dict]:
+    """Parse abuse.ch ThreatFox 'recent' CSV into hash IOCs: value, type,
+    malware family (threat), any CVE, and a link to the IOC page."""
+    import csv
+    import io
+    rows = [ln for ln in text.splitlines() if ln and not ln.lstrip().startswith("#")]
+    out: list[dict] = []
+    for rec in csv.reader(io.StringIO("\n".join(rows))):
+        # first_seen, ioc_id, ioc_value, ioc_type, threat_type, fk_malware,
+        # malware_alias, malware_printable, confidence, reference, tags, ...
+        if len(rec) < 8:
+            continue
+        ioc_type = rec[3].strip().lower()
+        if not ioc_type.endswith("_hash"):
+            continue
+        ioc_id = rec[1].strip()
+        value = rec[2].strip()
+        malware = (rec[7] or rec[5] or "Unknown").strip()
+        tags = rec[10] if len(rec) > 10 else ""
+        m = _CVE_RE.search(f"{tags} {malware}")
+        out.append({
+            "hash": value,
+            "htype": ioc_type.replace("_hash", "").upper(),
+            "malware": malware,
+            "cve": m.group(0).upper() if m else "",
+            "link": f"https://threatfox.abuse.ch/ioc/{ioc_id}/" if ioc_id else "https://threatfox.abuse.ch/",
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def fetch_iocs(limit: int = 40) -> list[dict]:
+    """Recent malware hash IOCs from abuse.ch ThreatFox (free, no key).
+    Never raises — an unreachable IOC feed just yields an empty hash panel."""
+    url = "https://threatfox.abuse.ch/export/csv/recent/"
+    try:
+        text = _http_get(url, timeout=30).decode("utf-8", "replace")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ! ThreatFox IOCs: fetch failed ({exc})")
+        return []
+    iocs = _parse_threatfox(text, limit)
+    print(f"  · ThreatFox IOCs: {len(iocs)} hashes")
+    return iocs
 
 
 def dedupe(items: list[Item]) -> list[Item]:

@@ -191,7 +191,86 @@ def _dashboard(digests, sources, sections) -> str:
     )
 
 
-def render_inner(digests: dict[str, list[Item]], display=None, sources=None) -> str:
+def _rail(digests, sources, iocs=None) -> str:
+    """Desktop right rail, two stacked panels:
+    TOP  — full CVE numbers published across the source feeds (click to open).
+    BOTTOM — malware hash IOCs (source → threat → CVE) from ThreatFox + any
+             hashes found in the feeds themselves."""
+    import re as _re
+    window = digests.get("weekly") or digests.get("monthly") or digests.get("daily") or []
+    cve_re = _re.compile(r"CVE-\d{4}-\d{4,7}", _re.I)
+
+    # ---- TOP: CVE numbers ----
+    seen: set = set()
+    cve_rows = []
+    for it in window:  # score-ordered
+        cves = [t.upper() for t in it.tags if cve_re.fullmatch(t or "")]
+        if not cves:
+            cves = [c.upper() for c in cve_re.findall(it.title + " " + it.summary)]
+        for c in cves:
+            if c in seen:
+                continue
+            seen.add(c)
+            cve_rows.append((c, it.source, it.link))
+    cve_html = "".join(
+        f'<a class="rl" href="{_esc(link)}" target="_blank" rel="noopener">'
+        f'<span class="cid">{_esc(cid)}</span><span class="rl-src">{_esc(src)}</span></a>'
+        for cid, src, link in cve_rows[:80]
+    ) or '<div class="rl-empty">No CVE numbers in this window.</div>'
+
+    # ---- BOTTOM: hash IOCs ----
+    hseen: set = set()
+    hash_rows = []
+    for io in (iocs or []):
+        h = io.get("hash", "")
+        if not h or h in hseen:
+            continue
+        hseen.add(h)
+        hash_rows.append((h, io.get("htype", ""), io.get("malware", ""),
+                          io.get("cve", ""), io.get("link", "#")))
+    # supplement with hashes that appear directly in the feeds
+    hex_re = _re.compile(r"\b[a-fA-F0-9]{64}\b|\b[a-fA-F0-9]{40}\b|\b[a-fA-F0-9]{32}\b")
+    for it in window:
+        for h in hex_re.findall(f"{it.title} {it.summary}"):
+            if h in hseen:
+                continue
+            hseen.add(h)
+            kind = {32: "MD5", 40: "SHA1", 64: "SHA256"}.get(len(h), "")
+            cve = (cve_re.search(it.title + " " + it.summary) or [None])
+            cve = cve.group(0).upper() if hasattr(cve, "group") else ""
+            hash_rows.append((h, kind, it.source, cve, it.link))
+
+    def _hrow(h, kind, threat, cve, link):
+        short = h if len(h) <= 22 else f"{h[:14]}\u2026{h[-6:]}"
+        meta = " &middot; ".join(x for x in (threat, cve) if x)
+        return (f'<a class="rl hrow" href="{_esc(link)}" target="_blank" rel="noopener" '
+                f'title="{_esc(h)}"><span class="htag">{_esc(kind)}</span>'
+                f'<span class="hval">{_esc(short)}</span>'
+                + (f'<span class="hmeta2">{_esc(meta)}</span>' if meta else "")
+                + '</a>')
+
+    hash_html = "".join(_hrow(*r) for r in hash_rows[:80]) or (
+        '<div class="rl-empty">No hash IOCs available. Enable network on the '
+        'build runner so ThreatFox can be reached.</div>')
+
+    body = (
+        f'<div class="rail-sec"><div class="rail-h">CVE NUMBERS</div>'
+        f'<div class="rail-list">{cve_html}</div></div>'
+        f'<div class="rail-sec"><div class="rail-h">HASH IOCs &middot; source / threat / CVE</div>'
+        f'<div class="rail-list">{hash_html}</div></div>'
+    )
+    # continuous scroll: duplicate the body so the loop is seamless; speed scales
+    # with content length (slower when there's more to read).
+    n = min(len(cve_rows), 80) + min(len(hash_rows), 80)
+    dur = max(28, int(n * 1.6))
+    return (
+        '<aside class="rail"><div class="rail-scroll">'
+        f'<div class="rail-track" style="animation-duration:{dur}s">{body}{body}</div>'
+        '</div></aside>'
+    )
+
+
+def render_inner(digests: dict[str, list[Item]], display=None, sources=None, iocs=None) -> str:
     """The secret part: dashboard + tabs + panels. This is what gets encrypted."""
     sections, section_limits, cap = _resolve_display(display)
     dash = _dashboard(digests, sources, sections)
@@ -199,24 +278,31 @@ def render_inner(digests: dict[str, list[Item]], display=None, sources=None) -> 
         f'<button class="tab{" active" if p == "daily" else ""}" data-t="{p}">{lbl}</button>'
         for p, lbl in _TABS
     )
-    # source strip: All + each source that has items, busiest first
+    # source strip: All + EVERY configured source (mandatory), busiest first.
+    # JS hides the ones with no items in the current tab + active filter.
     from collections import Counter
     widest = digests.get("monthly") or digests.get("weekly") or digests.get("daily") or []
-    order = [s for s, _ in Counter(i.source for i in widest).most_common()]
+    cnt = Counter(i.source for i in widest)
+    names = [s["name"] for s in sources] if sources else list(cnt)
+    names.sort(key=lambda n: (-cnt.get(n, 0), n.lower()))
     stabs = '<span class="stab on" data-fsrc="">All sources</span>' + "".join(
-        f'<span class="stab" data-fsrc="{_esc(s)}">{_esc(s)}</span>' for s in order
+        f'<span class="stab" data-fsrc="{_esc(s)}">{_esc(s)}</span>' for s in names
     )
     strip = f'<div class="srcstrip-l">BROWSE BY SOURCE</div><div class="srcstrip">{stabs}</div>'
     panels = "".join(
         _panel(p, digests.get(p, []), sections, section_limits, cap) for p, _ in _TABS
     )
-    return f'{dash}<div class="tabs">{tabs}</div>{strip}{panels}'
+    side = f'<aside class="side">{dash}{strip}</aside>'
+    main = f'<div class="main"><div class="tabs">{tabs}</div>{panels}</div>'
+    rail = _rail(digests, sources, iocs)
+    return f'<div class="layout">{side}{main}{rail}</div>'
 
 
 _STYLE = """
 :root{color-scheme:dark}*{box-sizing:border-box}
 body{margin:0;background:#0a0e16;color:#f4f7fb;font:16px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}
-.wrap{max-width:560px;margin:0 auto;padding:16px 14px 40px}
+.wrap{max-width:620px;margin:0 auto;padding:16px 14px 40px}
+.layout{display:block}
 .top{display:flex;align-items:center;justify-content:space-between;margin:4px 2px 18px}
 .brand{display:flex;align-items:center;gap:8px}
 .brand .mk{font-size:20px;color:#6ee7d6}
@@ -272,6 +358,52 @@ body{margin:0;background:#0a0e16;color:#f4f7fb;font:16px/1.5 -apple-system,Segoe
 .stab{flex:0 0 auto;cursor:pointer;font-size:10.5px;color:#9aa6bd;background:#0f1622;border:1px solid #232c3d;padding:3px 8px;border-radius:999px;white-space:nowrap;transition:background .15s,color .15s,border-color .15s}
 .stab:hover{border-color:#3a475d}
 .stab.on{background:#6ee7d6;border-color:#6ee7d6;color:#08110f;font-weight:600}
+.disclaimer{margin-top:18px;padding:11px 13px;background:#0f1622;border:1px solid #232c3d;border-radius:12px;font-size:11px;line-height:1.55;color:#7c8699}
+.disclaimer b{color:#9aa6bd}
+/* right rail (desktop only) */
+.rail{display:none}
+.rail-sec{margin-bottom:22px}
+.rail-h{font-size:11px;font-weight:500;letter-spacing:1px;color:#7c8699;margin-bottom:9px}
+.rail-list{display:flex;flex-direction:column;gap:1px}
+.rl{display:block;padding:6px 9px;border-radius:9px;text-decoration:none;font-size:12px;line-height:1.35;color:#c3ccdb;transition:background .12s}
+.rl:hover{background:#131a27}
+.cid{display:inline-block;font-weight:600;color:#6ee7d6;font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace;margin-right:8px}
+.rl-src{color:#7c8699;font-size:11px}
+.hrow{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px}
+.htag{font-size:9.5px;font-weight:600;letter-spacing:.5px;color:#08110f;background:#6ee7d6;border-radius:5px;padding:1px 5px}
+.hval{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#c3ccdb}
+.hmeta2{flex-basis:100%;color:#7c8699;font-size:10.5px}
+.rl-empty{font-size:11.5px;color:#5a6274;padding:6px 9px;line-height:1.5}
+.rail-scroll{overflow:hidden;position:relative}
+.rail-track{display:flex;flex-direction:column}
+@keyframes railscroll{from{transform:translateY(0)}to{transform:translateY(-50%)}}
+/* ---- Desktop / wide-browser layout ---- */
+@media (min-width:920px){
+  .wrap{max-width:1140px;padding:26px 26px 56px}
+  .layout{display:grid;grid-template-columns:340px 1fr;gap:32px;align-items:start}
+  .side{position:sticky;top:22px;max-height:calc(100vh - 44px);overflow-y:auto;scrollbar-width:thin}
+  .side::-webkit-scrollbar{width:6px}.side::-webkit-scrollbar-thumb{background:#232c3d;border-radius:3px}
+  .main{min-width:0}
+  .dash{margin-bottom:14px}
+  .tabs{position:sticky;top:0;z-index:2}
+  .htitle{font-size:20px}.hsum{font-size:14px}
+  .rtitle{font-size:15px}
+  .hero{padding:20px}
+  .top{margin-bottom:22px}
+}
+@media (min-width:1240px){
+  .wrap{max-width:1460px}
+  .layout{grid-template-columns:320px minmax(0,1fr) 300px}
+  .rail{display:block;position:sticky;top:22px;height:calc(100vh - 44px);overflow:hidden}
+  .rail-scroll{height:100%}
+  .rail-track{animation-name:railscroll;animation-timing-function:linear;animation-iteration-count:infinite}
+  .rail:hover .rail-track{animation-play-state:paused}
+}
+@media (min-width:1240px) and (prefers-reduced-motion:reduce){
+  .rail{overflow-y:auto;scrollbar-width:thin}
+  .rail-track{animation:none}
+  .rail-track>.rail-sec:nth-child(n+3){display:none}
+}
 .srcs-t{margin-top:11px}
 .srcs-t>summary{cursor:pointer;font-size:11.5px;color:#8ea0b8;list-style:none;padding:5px 0 2px;user-select:none}
 .srcs-t>summary::-webkit-details-marker{display:none}
@@ -288,8 +420,8 @@ body{margin:0;background:#0a0e16;color:#f4f7fb;font:16px/1.5 -apple-system,Segoe
 """
 
 
-def build_plain(digests, share_url: str, brand: dict, display=None, sources=None) -> str:
-    return _shell(datetime.now(timezone.utc), render_inner(digests, display, sources), share_url, brand, None)
+def build_plain(digests, share_url: str, brand: dict, display=None, sources=None, iocs=None) -> str:
+    return _shell(datetime.now(timezone.utc), render_inner(digests, display, sources, iocs), share_url, brand, None)
 
 
 def build_encrypted(salt_b64, iv_b64, ct_b64, iters, share_url: str, brand: dict) -> str:
@@ -310,6 +442,12 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
             f'<span class="pill"><span class="live"></span>Updated {now:%H:%M} UTC</span></div>'
             f'<div class="tag">{_esc(tagline)} &middot; {now:%a %d %b %Y} UTC</div>')
     foot = (f'<a class="share" href="{wa}">&#128172; Share to group</a>'
+            f'<div class="disclaimer"><b>Disclaimer.</b> Cindera aggregates headlines from '
+            f'third-party public feeds. Items are not individually verified or endorsed, and every '
+            f'link opens an external site. Automated screening drops obviously malicious links '
+            f'(non-HTTPS, IP hosts, look-alike domains, direct downloads, shorteners) but is not a '
+            f'guarantee &mdash; always confirm an item&#39;s authenticity and legitimacy at the '
+            f'original source before acting.</div>'
             f'<div class="foot">Members only &middot; every item links to its source. '
             f'Verify before acting.</div></div>')
 
@@ -317,11 +455,19 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
               "t.onclick=function(){var p=t.dataset.t;"
               "document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x===t)});"
               "document.querySelectorAll('.panel').forEach(function(s){s.classList.toggle('active',s.dataset.p===p)});"
+              "if(window.cinUpdate)cinUpdate();"
               "};});}")
 
     filter_js = (
         "var CF={src:'',cat:'',sev:''};"
-        "function cinApply(){document.querySelectorAll('.panel').forEach(function(p){"
+        # sources that have >=1 item in the ACTIVE panel matching the current cat/sev
+        "function cinPresent(){var p=document.querySelector('.panel.active'),m={};"
+        "if(p)p.querySelectorAll('[data-cat]').forEach(function(el){"
+        "if((!CF.cat||el.getAttribute('data-cat')===CF.cat)&&(!CF.sev||el.getAttribute('data-sev')===CF.sev))"
+        "m[el.getAttribute('data-src')]=1;});return m;}"
+        "function cinUpdate(){var m=cinPresent();"
+        "if(CF.src&&!m[CF.src])CF.src='';"                       # selected source not in this view → reset to All
+        "document.querySelectorAll('.panel').forEach(function(p){"
         "p.querySelectorAll('[data-cat]').forEach(function(el){"
         "var ok=(!CF.src||el.getAttribute('data-src')===CF.src)"
         "&&(!CF.cat||el.getAttribute('data-cat')===CF.cat)"
@@ -332,7 +478,11 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
         "p.querySelectorAll('.sec-label').forEach(function(lbl){var vis=false,n=lbl.nextElementSibling;"
         "while(n&&!n.classList.contains('sec-label')){"
         "if(n.hasAttribute('data-cat')&&n.style.display!=='none'){vis=true;break;}n=n.nextElementSibling;}"
-        "lbl.style.display=vis?'':'none';});});}"
+        "lbl.style.display=vis?'':'none';});});"
+        # hide source chips with no items in the current view
+        "document.querySelectorAll('.stab').forEach(function(c){var s=c.getAttribute('data-fsrc');"
+        "c.style.display=(s===''||m[s])?'':'none';});"
+        "cinPaint();}"
         "function cinPaint(){"
         "document.querySelectorAll('.chip.cl[data-fc]').forEach(function(c){c.classList.toggle('on',CF.cat!==''&&c.getAttribute('data-fc')===CF.cat)});"
         "document.querySelectorAll('.chip.cl[data-fs]').forEach(function(c){c.classList.toggle('on',CF.sev!==''&&c.getAttribute('data-fs')===CF.sev)});"
@@ -344,9 +494,11 @@ def _shell(now, inner, share_url, brand, encrypted) -> str:
         "if(c.hasAttribute('data-clear')){CF.cat='';CF.sev='';}"
         "else if(c.hasAttribute('data-fc')){var v=c.getAttribute('data-fc');CF.cat=(CF.cat===v?'':v);if(CF.cat)cinWeekly();}"
         "else if(c.hasAttribute('data-fs')){var v=c.getAttribute('data-fs');CF.sev=(CF.sev===v?'':v);if(CF.sev)cinWeekly();}"
-        "cinPaint();cinApply();};});"
+        "cinUpdate();};});"
         "document.querySelectorAll('.stab').forEach(function(c){c.onclick=function(){"
-        "var v=c.getAttribute('data-fsrc');CF.src=(CF.src===v?'':v);cinPaint();cinApply();};});}"
+        "if(c.style.display==='none')return;"
+        "var v=c.getAttribute('data-fsrc');CF.src=(CF.src===v?'':v);cinUpdate();};});"
+        "cinUpdate();}"                                          # initial pass: hide empty sources for Daily
     )
 
     if encrypted is None:
